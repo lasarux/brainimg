@@ -49,6 +49,32 @@ def main(argv: list[str] | None = None) -> int:
         "instead of ~10 GB). Small quality cost. Ignored on MPS (always "
         "quantized) and CUDA (never needed).",
     )
+    parser.add_argument(
+        "--cfg",
+        type=float,
+        default=None,
+        help="classifier-free guidance scale (default: 7.5). Higher = more "
+        "prompt adherence, lower = more ControlNet/structural fidelity.",
+    )
+    parser.add_argument(
+        "--depth-scale",
+        type=float,
+        default=None,
+        help="depth ControlNet conditioning scale (default: 1.5)",
+    )
+    parser.add_argument(
+        "--canny-scale",
+        type=float,
+        default=None,
+        help="canny ControlNet conditioning scale (default: 1.2)",
+    )
+    parser.add_argument(
+        "--seg-scale",
+        type=float,
+        default=None,
+        help="segmentation ControlNet conditioning scale (default: 0.9). "
+        "Ignored when the file has no seg map.",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.brainimg)
@@ -84,6 +110,10 @@ def main(argv: list[str] | None = None) -> int:
         steps=args.steps,
         device_override=device,
         quantize=args.quantize,
+        guidance_scale=args.cfg,
+        depth_scale=args.depth_scale,
+        canny_scale=args.canny_scale,
+        seg_scale=args.seg_scale,
     )
     dt = time.time() - t0
 

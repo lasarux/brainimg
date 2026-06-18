@@ -31,7 +31,7 @@ from typing import Any
 SCHEMA_VERSION = "0.1"
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, low quality, deformed, watermark, jpeg artifacts"
-DEFAULT_STEPS = 20
+DEFAULT_STEPS = 30
 DEFAULT_CAPTION_MODEL = "qwen2-vl-2b-4bit"
 
 # Downscaled conditioning map resolution. Larger -> better structural fidelity

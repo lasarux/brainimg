@@ -129,6 +129,27 @@ def _name_color(rgb: tuple[float, float, float]) -> str:
     return best or "neutral"
 
 
+def brightness_saturation_of(img: Image.Image) -> tuple[float, float]:
+    """Return (brightness, saturation) on a 0-255 scale for *img*.
+
+    *brightness* is the mean Rec.609 luminance (0.299R + 0.587G + 0.114B).
+    *saturation* is the mean normalized channel spread ``(max-min)/max`` scaled
+    to 0-255 (0 = gray, 255 = fully saturated).
+
+    Shared by the encoder (storing target stats) and the decoder (measuring the
+    generation) so the same metric is used on both sides.
+    """
+    import numpy as np
+
+    arr = np.array(img.convert("RGB")).astype(float)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    brightness = float((0.299 * r + 0.587 * g + 0.114 * b).mean())
+    maxc = arr.max(2)
+    minc = arr.min(2)
+    sat = float(np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1.0), 0.0).mean() * 255.0)
+    return round(brightness, 1), round(sat, 1)
+
+
 def extract_color_style(img: Image.Image) -> tuple[str, float, float]:
     """Return (style_prefix, brightness, saturation) for *img*.
 
@@ -139,12 +160,8 @@ def extract_color_style(img: Image.Image) -> tuple[str, float, float]:
     """
     import numpy as np
 
+    brightness, sat = brightness_saturation_of(img)
     arr = np.array(img.convert("RGB")).astype(float)
-    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-    brightness = float((0.299 * r + 0.587 * g + 0.114 * b).mean())
-    maxc = arr.max(2)
-    minc = arr.min(2)
-    sat = float(np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1.0), 0.0).mean() * 255.0)
     mean_rgb = tuple(arr.reshape(-1, 3).mean(0).round(1))
 
     parts: list[str] = []
@@ -165,7 +182,7 @@ def extract_color_style(img: Image.Image) -> tuple[str, float, float]:
     if sat >= 30:
         parts.append(f"{_name_color(mean_rgb)} dominant tones")
 
-    return ", ".join(parts), round(brightness, 1), round(sat, 1)
+    return ", ".join(parts), brightness, sat
 
 
 # --------------------------------------------------------------------------- #
@@ -408,9 +425,10 @@ def encode_image(image_path: str | Path, seed: int | None = None) -> BrainimgDat
     canny_b64 = extract_canny(img)
     seg_b64 = extract_segmentation(img)
 
-    # Use the raw caption as the prompt. Prepending the color style made the
-    # prompt too long and CLIP truncated it (77-token limit). The color stats
-    # are stored in the file separately for potential post-processing.
+    # The raw caption is the prompt. The color style prefix (e.g. "dark,
+    # low-key lighting, red dominant tones") used to be prepended but pushed
+    # long captions over the CLIP 77-token limit. It is now stored in `extra`
+    # and the decoder prepends it only when the combined length still fits.
     prompt = caption
 
     return BrainimgData(
@@ -427,4 +445,5 @@ def encode_image(image_path: str | Path, seed: int | None = None) -> BrainimgDat
         steps=DEFAULT_STEPS,
         target_brightness=target_brightness,
         target_saturation=target_saturation,
+        extra={"color_style": color_style},
     )

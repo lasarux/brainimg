@@ -32,6 +32,25 @@ an ADE20K colorized seg map and the decoder adds a third ControlNet for it.
 Encoder and decoder are separate processes, so models are never resident at the
 same time (important on an 8 GB Apple Silicon Mac).
 
+### Decode quality enhancements
+
+The decoder applies several fixes for SD 1.5's known weaknesses (no schema
+change; uses data already in the file):
+
+- **`sd-vae-ft-mse` VAE**: the stock SD 1.5 VAE is swapped for the fine-tuned
+  MSE VAE — cleaner decode, better skin tones and colors, fewer washed-out
+  highlights. Tiny (~335 MB), no runtime cost.
+- **Brightness/saturation matching**: SD 1.5 tends to over-brighten and
+  over-saturate. The blueprint stores the original image's
+  `target_brightness` / `target_saturation`, and the decoder post-processes
+  the generation (uniform RGB gain for brightness, HSV-S scaling for
+  saturation) to match. A no-op for older files with no stored stats.
+- **Color style prefix**: the encoder's mood descriptor
+  (`"dark, low-key lighting, red dominant tones"`, ...) is stored in `extra`
+  and prepended to the caption **only when the combined length fits the CLIP
+  77-token limit** — so it biases the mood without ever truncating the caption.
+- **30 default steps** (was 20), and tunable ControlNet scales / CFG via CLI.
+
 ### Why int8 quantization?
 
 On Apple Silicon (MPS), SD 1.5 in fp16 produces NaNs (a black output frame)
@@ -82,6 +101,10 @@ python decoder.py out.brainimg -o recon.png --device cuda
 
 # Larger output on a high-RAM machine
 python decoder.py out.brainimg -o recon.png --device cpu --size 512x512
+
+# Tune ControlNet scales / guidance (defaults: depth 1.5, canny 1.2, seg 0.9, cfg 7.5)
+python decoder.py out.brainimg -o recon.png --device cpu \
+    --depth-scale 1.8 --canny-scale 1.0 --seg-scale 1.1 --cfg 8.5
 ```
 
 Encoder prints the compression ratio. Decoder prints the device, seed, and

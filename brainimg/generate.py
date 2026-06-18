@@ -9,6 +9,16 @@ scene described by the blueprint:
     the blueprint carries an ADE20K segmentation map (newer v0.1 files). Older
     files without it decode exactly as before.
 
+Quality post-processing:
+  * The stock SD 1.5 VAE is replaced with the fine-tuned ``sd-vae-ft-mse``
+    (cleaner decode, better skin/color).
+  * After generation, brightness/saturation are matched to the targets stored
+    in the blueprint (SD 1.5 tends to over-brighten/over-saturate). A no-op
+    for older files with no stored stats.
+  * A stored color style prefix ("dark, low-key lighting, red dominant
+    tones", ...) is prepended to the caption when the combined length fits the
+    CLIP 77-token limit.
+
 Device strategy:
   * ``cpu``  : full fp32, no quantization. Best fidelity, slow (minutes/image).
     Needs ~10 GB RAM. Pass ``--quantize`` to int8-quantize the weights and
@@ -26,10 +36,11 @@ from pathlib import Path
 from PIL import Image
 
 from .device import free_torch, get_dtype, get_torch_device
-from .extract import b64_to_image
+from .extract import b64_to_image, brightness_saturation_of
 from .format import BrainimgData, load_brainimg
 
 SD_MODEL_ID = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+VAE_MODEL_ID = "stabilityai/sd-vae-ft-mse"
 CONTROLNET_DEPTH_ID = "lllyasviel/control_v11f1p_sd15_depth"
 CONTROLNET_CANNY_ID = "lllyasviel/control_v11p_sd15_canny"
 CONTROLNET_SEG_ID = "lllyasviel/control_v11p_sd15_seg"
@@ -44,9 +55,71 @@ CONTROLNET_SEG_SCALE = 0.9
 # Standard SD 1.5 guidance.
 GUIDANCE_SCALE = 7.5
 
+# CLIP token limit for SD 1.5. The style prefix is only prepended to the
+# prompt if the combined length still fits, otherwise the caption alone is
+# used so it is never truncated.
+CLIP_MAX_TOKENS = 77
+
 # Default generation side length. 512 is reasonable on a machine with plenty
 # of RAM; 256 is the safe ceiling on an 8 GB Apple Silicon Mac with int8.
 MAX_DEFAULT_SIDE = 512
+
+
+def _match_color_statistics(
+    image: Image.Image,
+    target_brightness: float,
+    target_saturation: float,
+) -> Image.Image:
+    """Post-process *image* so its brightness/saturation match the targets.
+
+    SD 1.5 systematically over-brightens and over-saturates; the blueprint
+    stores the original image's stats so the decoder can correct this.
+
+      * saturation: scaled in HSV space on the S channel by
+        ``target/current``, iterated 1-2x to converge (HSV-S is not linear in
+        our custom saturation metric). Ratios are clamped to [0.5, 2.0] to
+        avoid clipping artefacts.
+      * brightness: applied as a uniform RGB gain ``target/current`` *after*
+        saturation. A uniform gain preserves color balance and leaves the
+        saturation metric (a ratio of channels) invariant, so correcting
+        brightness last does not undo the saturation work. (The reverse order
+        would let the HSV-S scaling disturb the brightness.)
+
+    Returns the original image unchanged if the targets are 0.0 (older v0.1
+    files without stored stats) or the image stats are already within ~2%.
+    """
+    import numpy as np
+
+    if target_brightness <= 0 and target_saturation <= 0:
+        return image
+
+    out = image.convert("RGB")
+    cur_b, cur_s = brightness_saturation_of(out)
+    if cur_b <= 0 and cur_s <= 0:
+        return out
+
+    # --- saturation first: HSV-S scaling, iterated to converge ---
+    # This also perturbs brightness; the brightness step below corrects that.
+    if target_saturation > 0 and cur_s > 0 and abs(cur_s - target_saturation) > 2.0:
+        for _ in range(2):
+            _, cur_s = brightness_saturation_of(out)
+            if cur_s <= 0 or abs(cur_s - target_saturation) <= 2.0:
+                break
+            ratio = max(0.5, min(2.0, target_saturation / cur_s))
+            hsv = np.array(out.convert("HSV"), dtype=np.float32)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * ratio, 0, 255)
+            out = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
+
+    # --- brightness last: uniform gain (preserves color balance & saturation) ---
+    if target_brightness > 0:
+        cur_b, _ = brightness_saturation_of(out)
+        if cur_b > 0 and abs(cur_b - target_brightness) > 2.0:
+            gain = max(0.5, min(2.0, target_brightness / cur_b))
+            arr = np.array(out, dtype=np.float32) * gain
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+            out = Image.fromarray(arr, "RGB")
+
+    return out
 
 
 def compute_target_size(
@@ -104,6 +177,7 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
     """
     import torch
     from diffusers import (
+        AutoencoderKL,
         ControlNetModel,
         StableDiffusionControlNetPipeline,
         UniPCMultistepScheduler,
@@ -137,6 +211,13 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
         use_safetensors=True,
         safety_checker=None,
         requires_safety_checker=False,
+    )
+
+    # Swap the stock SD 1.5 VAE for the fine-tuned MSE VAE: cleaner decode,
+    # better skin tones and colors, fewer washed-out highlights. The VAE is
+    # tiny (~335 MB) and produces a noticeable quality jump at no runtime cost.
+    pipe.vae = AutoencoderKL.from_pretrained(
+        VAE_MODEL_ID, torch_dtype=load_dtype
     )
 
     # CPU: upcast to fp32 BEFORE moving to device (diffusers refuses fp16 on CPU).
@@ -187,18 +268,48 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
     return pipe, torch
 
 
+def _build_prompt(data: BrainimgData, tokenizer) -> str:
+    """Prepend the stored color style prefix to the caption if it fits CLIP.
+
+    The style prefix ("dark, low-key lighting, red dominant tones", ...) is
+    extracted by the encoder and stored in ``data.extra['color_style']``.
+    Prepending it weights the mood first -- the front of the prompt has the
+    strongest CLIP weight. It is only prepended when the combined length fits
+    within the CLIP token limit so the caption itself is never truncated.
+    Older files without a stored color_style use the caption verbatim.
+    """
+    style = (data.extra or {}).get("color_style", "")
+    if not style:
+        return data.prompt
+    combined = f"{style}, {data.prompt}"
+    try:
+        n = len(tokenizer(combined, max_length=CLIP_MAX_TOKENS)["input_ids"])
+    except Exception:
+        return data.prompt
+    if n <= CLIP_MAX_TOKENS:
+        return combined
+    return data.prompt
+
+
 def generate_image(
     data: BrainimgData,
     size: str | None = None,
     steps: int | None = None,
     device_override: str | None = None,
     quantize: bool = False,
+    guidance_scale: float | None = None,
+    depth_scale: float | None = None,
+    canny_scale: float | None = None,
+    seg_scale: float | None = None,
 ) -> Image.Image:
     """Regenerate a single image from *data*.
 
     Args:
         device_override: "cpu", "mps", "cuda", or None (auto-detect).
         quantize: int8-quantize weights on CPU to save memory (small quality cost).
+        guidance_scale: override the classifier-free guidance scale (default 7.5).
+        depth_scale / canny_scale / seg_scale: override the ControlNet
+            conditioning scales. Defaults are the module constants.
     """
     device = device_override or get_torch_device()
     dtype = get_dtype(device)
@@ -210,23 +321,35 @@ def generate_image(
 
     has_seg = bool(getattr(data, "segmentation_map_b64", ""))
     conditioning = _load_conditioning_maps(data, target_w, target_h)
-    scales = [CONTROLNET_DEPTH_SCALE, CONTROLNET_CANNY_SCALE]
+    scales = [
+        depth_scale if depth_scale is not None else CONTROLNET_DEPTH_SCALE,
+        canny_scale if canny_scale is not None else CONTROLNET_CANNY_SCALE,
+    ]
     if has_seg:
-        scales.append(CONTROLNET_SEG_SCALE)
+        scales.append(seg_scale if seg_scale is not None else CONTROLNET_SEG_SCALE)
 
     pipe, torch = _build_pipeline(device, dtype, quantize=quantize, with_seg=has_seg)
 
+    prompt = _build_prompt(data, pipe.tokenizer)
+
     gen = torch.Generator(device).manual_seed(data.seed)
     result = pipe(
-        prompt=data.prompt,
+        prompt=prompt,
         negative_prompt=data.negative_prompt,
         image=conditioning,
         controlnet_conditioning_scale=scales,
-        guidance_scale=GUIDANCE_SCALE,
+        guidance_scale=guidance_scale if guidance_scale is not None else GUIDANCE_SCALE,
         num_inference_steps=n_steps,
         generator=gen,
     )
     image: Image.Image = result.images[0]
+
+    # Post-process brightness/saturation to match the stored targets. SD 1.5
+    # tends to over-brighten/over-saturate; the blueprint carries the original
+    # stats so we can correct it. A no-op for old files (targets == 0.0).
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
 
     del pipe
     free_torch()
@@ -240,11 +363,23 @@ def decode_brainimg(
     steps: int | None = None,
     device_override: str | None = None,
     quantize: bool = False,
+    guidance_scale: float | None = None,
+    depth_scale: float | None = None,
+    canny_scale: float | None = None,
+    seg_scale: float | None = None,
 ) -> tuple[BrainimgData, Image.Image]:
     """Read *path*, regenerate the image, save it to *out_path*."""
     data = load_brainimg(path)
     image = generate_image(
-        data, size=size, steps=steps, device_override=device_override, quantize=quantize
+        data,
+        size=size,
+        steps=steps,
+        device_override=device_override,
+        quantize=quantize,
+        guidance_scale=guidance_scale,
+        depth_scale=depth_scale,
+        canny_scale=canny_scale,
+        seg_scale=seg_scale,
     )
 
     out_path = Path(out_path)

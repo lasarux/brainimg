@@ -1,12 +1,13 @@
 """The encoder: extract a semantic + structural blueprint from an image.
 
-Three extractors run in sequence (memory is released between heavy stages so an
+Four extractors run in sequence (memory is released between heavy stages so an
 8 GB Apple Silicon Mac can cope):
 
-  1. Captioning  -- Qwen2-VL-2B via MLX (Apple Silicon) or transformers (CPU/CUDA)
-                                                              -> text prompt
-  2. Depth map   -- Depth-Anything-Small   (transformers)  -> 64x64 grayscale
-  3. Canny edges -- OpenCV                                 -> 64x64 binary edges
+  1. Captioning   -- Qwen2.5-VL-7B via MLX (Apple) or transformers (CPU/CUDA)
+                                                                -> text prompt
+  2. Depth map    -- Depth-Anything-V2-Base   (transformers)  -> 128x128 grayscale
+  3. Canny edges  -- OpenCV                                    -> 128x128 binary edges
+  4. Segmentation -- OneFormer ADE20K (colorized)              -> 128x128 palette PNG
 
 The result is a :class:`brainimg.format.BrainimgData` ready to save as a
 tiny ``.brainimg`` file.
@@ -31,8 +32,9 @@ from .format import (
 )
 
 CAPTION_MODEL_ID = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
-CAPTION_MODEL_ID_TORCH = "Qwen/Qwen2-VL-2B-Instruct"
-DEPTH_MODEL_ID = "LiheYoung/depth-anything-small-hf"
+CAPTION_MODEL_ID_TORCH = "Qwen/Qwen2.5-VL-7B-Instruct"
+DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Base-hf"
+SEG_MODEL_ID = "shi-labs/oneformer_ade20k_swin_tiny"
 
 CAPTION_INSTRUCTION = (
     "In one short sentence, describe this image for reconstruction: "
@@ -68,6 +70,52 @@ _COLOR_NAMES = [
     ((60, 100, 130), "blue"),
     ((100, 80, 130), "purple"),
     ((150, 130, 160), "pink"),
+]
+
+# ADE20K 150-class color palette. This is the exact palette the SD 1.5 seg
+# ControlNet (lllyasviel/control_v11p_sd15_seg) was trained on, so the
+# colorized OneFormer output matches its conditioning distribution. Inlined
+# from controlnet_aux.util.ade_palette() to avoid importing controlnet_aux
+# (which drags in timm/segment-anything) at runtime.
+_ADE20K_PALETTE = [
+    [120, 120, 120], [180, 120, 120], [6, 230, 230], [80, 50, 50],
+    [4, 200, 3], [120, 120, 80], [140, 140, 140], [204, 5, 255],
+    [230, 230, 230], [4, 250, 7], [224, 5, 255], [235, 255, 7],
+    [150, 5, 61], [120, 120, 70], [8, 255, 51], [255, 6, 82],
+    [143, 255, 140], [204, 255, 4], [255, 51, 7], [204, 70, 3],
+    [0, 102, 200], [61, 230, 250], [255, 6, 51], [11, 102, 255],
+    [255, 7, 71], [255, 9, 224], [9, 7, 230], [220, 220, 220],
+    [255, 9, 92], [112, 9, 255], [8, 255, 214], [7, 255, 224],
+    [255, 184, 6], [10, 255, 71], [255, 41, 10], [7, 255, 255],
+    [224, 255, 8], [102, 8, 255], [255, 61, 6], [255, 194, 7],
+    [255, 122, 8], [0, 255, 20], [255, 8, 41], [255, 5, 153],
+    [6, 51, 255], [235, 12, 255], [160, 150, 20], [0, 163, 255],
+    [140, 140, 140], [250, 10, 15], [20, 255, 0], [31, 255, 0],
+    [255, 31, 0], [255, 224, 0], [153, 255, 0], [0, 0, 255],
+    [255, 71, 0], [0, 235, 255], [0, 173, 255], [31, 0, 255],
+    [11, 200, 200], [255, 82, 0], [0, 255, 245], [0, 61, 255],
+    [0, 255, 112], [0, 255, 133], [255, 0, 0], [255, 163, 0],
+    [255, 102, 0], [194, 255, 0], [0, 143, 255], [51, 255, 0],
+    [0, 82, 255], [0, 255, 41], [0, 255, 173], [10, 0, 255],
+    [173, 255, 0], [0, 255, 153], [255, 92, 0], [255, 0, 255],
+    [255, 0, 245], [255, 0, 102], [255, 173, 0], [255, 0, 20],
+    [255, 184, 184], [0, 31, 255], [0, 255, 61], [0, 71, 255],
+    [255, 0, 204], [0, 255, 194], [0, 255, 82], [0, 10, 255],
+    [0, 112, 255], [51, 0, 255], [0, 194, 255], [0, 122, 255],
+    [0, 255, 163], [255, 153, 0], [0, 255, 10], [255, 112, 0],
+    [143, 255, 0], [82, 0, 255], [163, 255, 0], [255, 235, 0],
+    [8, 184, 170], [133, 0, 255], [0, 255, 92], [184, 0, 255],
+    [255, 0, 31], [0, 184, 255], [0, 214, 255], [255, 0, 112],
+    [92, 255, 0], [0, 224, 255], [112, 224, 255], [70, 184, 160],
+    [163, 0, 255], [153, 0, 255], [71, 255, 0], [255, 0, 163],
+    [255, 204, 0], [255, 0, 143], [0, 255, 235], [133, 255, 0],
+    [255, 0, 235], [245, 0, 255], [255, 0, 122], [255, 245, 0],
+    [10, 190, 212], [214, 255, 0], [0, 204, 255], [20, 0, 255],
+    [255, 255, 0], [0, 153, 255], [0, 41, 255], [0, 255, 204],
+    [41, 0, 255], [41, 255, 0], [173, 0, 255], [0, 245, 255],
+    [71, 0, 255], [122, 0, 255], [0, 255, 184], [0, 92, 255],
+    [184, 255, 0], [0, 133, 255], [255, 214, 0], [25, 194, 194],
+    [102, 255, 0], [92, 0, 255],
 ]
 
 
@@ -242,7 +290,7 @@ def _extract_caption_transformers(image_path: str | Path, max_tokens: int = 60) 
 # 2. depth map (PyTorch + MPS)
 # --------------------------------------------------------------------------- #
 def extract_depth(img: Image.Image) -> str:
-    """Return a base64 64x64 JPEG depth map (near=bright, far=dark)."""
+    """Return a base64 MAP_SIZExMAP_SIZE JPEG depth map (near=bright, far=dark)."""
     import torch
     from transformers import pipeline as hf_pipeline
 
@@ -269,7 +317,7 @@ def extract_depth(img: Image.Image) -> str:
 # 3. canny edges (OpenCV, CPU)
 # --------------------------------------------------------------------------- #
 def extract_canny(img: Image.Image, low: int = 50, high: int = 150) -> str:
-    """Return a base64 64x64 PNG Canny edge map."""
+    """Return a base64 MAP_SIZExMAP_SIZE PNG Canny edge map."""
     import cv2
     import numpy as np
 
@@ -281,6 +329,56 @@ def extract_canny(img: Image.Image, low: int = 50, high: int = 150) -> str:
     if not ok:
         raise RuntimeError("failed to encode Canny edge map")
     return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+# --------------------------------------------------------------------------- #
+# 4. segmentation (OneFormer ADE20K -> colorized, for the seg ControlNet)
+# --------------------------------------------------------------------------- #
+def extract_segmentation(img: Image.Image) -> str:
+    """Return a base64 MAP_SIZExMAP_SIZE PNG ADE20K colorized segmentation map.
+
+    Runs OneFormer (ADE20K, Swin-Tiny) semantic segmentation, then maps each
+    class id to its ADE20K palette color. The output matches the conditioning
+    distribution of ``lllyasviel/control_v11p_sd15_seg``.
+    """
+    import numpy as np
+    import torch
+    from transformers import AutoModelForUniversalSegmentation, AutoProcessor
+
+    device = get_torch_device()
+    dtype = get_dtype(device)
+
+    processor = AutoProcessor.from_pretrained(SEG_MODEL_ID)
+    model = AutoModelForUniversalSegmentation.from_pretrained(
+        SEG_MODEL_ID, dtype=dtype
+    ).to(device)
+    model.eval()
+
+    inputs = processor(images=img, task_inputs=["semantic"], return_tensors="pt").to(
+        device
+    )
+    with torch.inference_mode():
+        outputs = model(**inputs)
+
+    seg = processor.post_process_semantic_segmentation(
+        outputs, target_sizes=[img.size[::-1]]
+    )[0]
+    seg_np = seg.cpu().numpy().astype(np.int64)
+    h, w = seg_np.shape
+    color = np.zeros((h, w, 3), dtype=np.uint8)
+    for cid in np.unique(seg_np):
+        color[seg_np == cid] = _ADE20K_PALETTE[int(cid) % len(_ADE20K_PALETTE)]
+    seg_img = Image.fromarray(color, "RGB").resize(
+        (MAP_SIZE, MAP_SIZE), Image.NEAREST
+    )
+
+    buf = io.BytesIO()
+    seg_img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    del model, processor, outputs, seg
+    free_torch()
+    return b64
 
 
 # --------------------------------------------------------------------------- #
@@ -298,16 +396,17 @@ def encode_image(image_path: str | Path, seed: int | None = None) -> BrainimgDat
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
 
-    # Stage 1: caption (MLX). Run first; the file path is needed because
-    # mlx-vlm reads images from disk/URL.
+    # Stage 1: caption (MLX on Apple Silicon, transformers Qwen2.5-VL elsewhere).
+    # Run first; the file path is needed because mlx-vlm reads images from disk/URL.
     caption = extract_caption(image_path)
 
-    # Stage 2 + 3: depth + canny. Reload the PIL image (captioner may have
-    # closed file handles).
+    # Stages 2-4: depth + canny + segmentation. Reload the PIL image (captioner
+    # may have closed file handles).
     img = Image.open(image_path).convert("RGB")
     color_style, target_brightness, target_saturation = extract_color_style(img)
     depth_b64 = extract_depth(img)
     canny_b64 = extract_canny(img)
+    seg_b64 = extract_segmentation(img)
 
     # Use the raw caption as the prompt. Prepending the color style made the
     # prompt too long and CLIP truncated it (77-token limit). The color stats
@@ -323,6 +422,7 @@ def encode_image(image_path: str | Path, seed: int | None = None) -> BrainimgDat
         negative_prompt=DEFAULT_NEGATIVE_PROMPT,
         depth_map_b64=depth_b64,
         canny_map_b64=canny_b64,
+        segmentation_map_b64=seg_b64,
         seed=seed,
         steps=DEFAULT_STEPS,
         target_brightness=target_brightness,

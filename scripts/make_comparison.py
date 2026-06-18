@@ -55,8 +55,10 @@ def make_comparison(
     left = _fit_height(left, target_h)
     right = _fit_height(right, target_h)
 
-    left = _label_panel(left, f"original  ({Image.open(original).size[0]}x{Image.open(original).size[1]})")
-    right = _label_panel(right, f"recon  ({Image.open(recon).size[0]}x{Image.open(recon).size[1]})")
+    ow, oh = Image.open(original).size
+    rw, rh = Image.open(recon).size
+    left = _label_panel(left, f"original  ({ow}x{oh})")
+    right = _label_panel(right, f"recon  ({rw}x{rh})")
 
     total_w = left.width + gap + right.width
     total_h = max(left.height, right.height)
@@ -77,8 +79,12 @@ def main() -> int:
         prog="make_comparison",
         description="Create a single side-by-side original-vs-recon comparison image.",
     )
-    parser.add_argument("original", nargs="?", default="samples/real.jpg", help="original image path")
-    parser.add_argument("recon", nargs="?", default="recon.png", help="reconstructed image path")
+    parser.add_argument(
+        "original", nargs="?", default="samples/real.jpg", help="original image path"
+    )
+    parser.add_argument(
+        "recon", nargs="?", default="recon.png", help="reconstructed image path"
+    )
     parser.add_argument(
         "-o", "--output", default="comparison.jpg", help="output comparison file (jpg/png)"
     )

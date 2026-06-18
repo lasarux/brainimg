@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+
+# Test / cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# HuggingFace model cache (can be several GB)
+.cache/
+*.safetensors
+*.bin
+*.ckpt
+
+# brainimg runtime artifacts
+*.brainimg
+out/
+recon.jpg
+recon_*.jpg
+recon_*.png
+# Generated side-by-side comparisons and Lenna test outputs (not tracked).
+lenna_recon.png
+lenna_comparison.jpg
+lenna.brainimg
+
+# OS
+.DS_Store

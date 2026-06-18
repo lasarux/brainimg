@@ -13,10 +13,21 @@ resolution.
 
 | Stage | Framework | Model |
 |---|---|---|
-| Captioning (encoder) | **MLX** | `mlx-community/Qwen2-VL-2B-Instruct-4bit` |
-| Depth map (encoder) | PyTorch + MPS | `LiheYoung/depth-anything-small-hf` |
+| Captioning (encoder) | **MLX** (Apple Silicon) / **transformers** (CPU/CUDA) | `mlx-community/Qwen2-VL-2B-Instruct-4bit` / `Qwen/Qwen2.5-VL-7B-Instruct` |
+| Depth map (encoder) | PyTorch + MPS | `depth-anything/Depth-Anything-V2-Base-hf` |
 | Canny edges (encoder) | OpenCV | — |
-| Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` |
+| Segmentation (encoder) | PyTorch (OneFormer ADE20K) | `shi-labs/oneformer_ade20k_swin_tiny` |
+| Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` (+ `lllyasviel/control_v11p_sd15_seg` when the blueprint has a seg map) |
+
+Captioning uses the MLX 4-bit model on Apple Silicon (fast, low memory) and
+falls back to the HuggingFace transformers Qwen2.5-VL-7B model on any other
+platform (x86/x64 CPUs, CUDA). Both produce an equivalent caption; the 7B is
+noticeably more detailed.
+
+The segmentation map is an **optional** field (added after the initial v0.1
+release), so older `.brainimg` files without it still decode exactly as before
+— the decoder just uses the two ControlNets (depth + Canny). Newer files carry
+an ADE20K colorized seg map and the decoder adds a third ControlNet for it.
 
 Encoder and decoder are separate processes, so models are never resident at the
 same time (important on an 8 GB Apple Silicon Mac).
@@ -33,7 +44,9 @@ fp32 for a clean final decode. This is the Apple Silicon equivalent of the
 
 ## Install
 
-Requires macOS on Apple Silicon, Python 3.12, and [`uv`](https://github.com/astral-sh/uv).
+Requires Python 3.12 and [`uv`](https://github.com/astral-sh/uv). Runs on
+Apple Silicon (MLX for captioning) or any x86/x64 CPU / NVIDIA CUDA machine
+(transformers Qwen2.5-VL-7B fallback for captioning).
 
 ```bash
 uv venv -p 3.12
@@ -41,8 +54,13 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-The first run downloads ~3.5 GB of models to `~/.cache/huggingface`. Close
-memory-hungry apps (browsers, etc.) before decoding on an 8 GB machine.
+> On a non-Apple platform, uninstall the non-functional `mlx`/`mlx-vlm` stub
+> wheels (they ship without `libmlx.so`): `pip uninstall -y mlx mlx-vlm mlx-lm`.
+
+The first run downloads the models to `~/.cache/huggingface` (captioner ~15 GB
+for the 7B on non-Apple, ~2 GB for the MLX 4-bit on Apple; depth + seg ~1 GB;
+decoder ~3.5 GB). Close memory-hungry apps (browsers, etc.) before decoding on
+an 8 GB machine.
 
 ## Usage
 
@@ -93,9 +111,12 @@ A small JSON document, typically 3-10 KB regardless of source resolution:
   "prompt": "a red apple on a wooden table next to a window",
   "negative_prompt": "blurry, low quality, deformed",
   "depth_map_b64": "...", "canny_map_b64": "...",
+  "segmentation_map_b64": "...",
   "seed": 42, "steps": 20
 }
 ```
+
+`segmentation_map_b64` is optional; older files omit it.
 
 ## Tests
 

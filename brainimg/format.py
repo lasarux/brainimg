@@ -49,6 +49,11 @@ REQUIRED_FIELDS = (
     "seed",
 )
 
+# Fields added after the initial v0.1 release. They are optional so older
+# .brainimg files (without them) still load; the decoder enables the extra
+# ControlNet only when the field is present and non-empty.
+OPTIONAL_FIELDS = ("segmentation_map_b64",)
+
 
 class BrainimgError(ValueError):
     """Raised when a .brainimg file is malformed or fails validation."""
@@ -63,6 +68,10 @@ class BrainimgData:
     depth_map_b64: str
     canny_map_b64: str
     seed: int
+    # ADE20K colorized segmentation map (OneFormer). Optional: older v0.1
+    # files have no seg map; the decoder adds the seg ControlNet only when
+    # this is a non-empty base64 string.
+    segmentation_map_b64: str = ""
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     steps: int = DEFAULT_STEPS
     caption_model: str = DEFAULT_CAPTION_MODEL
@@ -113,7 +122,8 @@ def validate(data: BrainimgData | dict[str, Any]) -> None:
     if not isinstance(steps, int) or steps <= 0:
         raise BrainimgError(f"steps must be a positive int, got {steps!r}")
 
-    # base64 maps must be decodable.
+    # base64 maps must be decodable. The required maps (depth, canny) must be
+    # present; the optional seg map is only validated when non-empty.
     for name in ("depth_map_b64", "canny_map_b64"):
         val = d[name]
         if not isinstance(val, str) or not val:
@@ -124,6 +134,17 @@ def validate(data: BrainimgData | dict[str, Any]) -> None:
             raise BrainimgError(f"{name} is not valid base64: {exc}") from exc
         if not decoded:
             raise BrainimgError(f"{name} decodes to empty bytes")
+
+    seg = d.get("segmentation_map_b64", "")
+    if seg:
+        if not isinstance(seg, str):
+            raise BrainimgError("segmentation_map_b64 must be a string")
+        try:
+            decoded = base64.b64decode(seg, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:  # type: ignore[attr-defined]
+            raise BrainimgError(f"segmentation_map_b64 is not valid base64: {exc}") from exc
+        if not decoded:
+            raise BrainimgError("segmentation_map_b64 decodes to empty bytes")
 
 
 def save_brainimg(path: str | Path, data: BrainimgData) -> int:

@@ -1,7 +1,13 @@
 """The decoder: regenerate an image from a .brainimg blueprint.
 
-Loads Stable Diffusion 1.5 with two ControlNets (depth + Canny) and re-paints
-the scene described by the blueprint.
+Loads Stable Diffusion 1.5 with two or three ControlNets and re-paints the
+scene described by the blueprint:
+
+  * depth (always)        -- lllyasviel/control_v11f1p_sd15_depth
+  * canny (always)        -- lllyasviel/control_v11p_sd15_canny
+  * segmentation (opt.)   -- lllyasviel/control_v11p_sd15_seg, used only when
+    the blueprint carries an ADE20K segmentation map (newer v0.1 files). Older
+    files without it decode exactly as before.
 
 Device strategy:
   * ``cpu``  : full fp32, no quantization. Best fidelity, slow (minutes/image).
@@ -26,10 +32,14 @@ from .format import BrainimgData, load_brainimg
 SD_MODEL_ID = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 CONTROLNET_DEPTH_ID = "lllyasviel/control_v11f1p_sd15_depth"
 CONTROLNET_CANNY_ID = "lllyasviel/control_v11p_sd15_canny"
+CONTROLNET_SEG_ID = "lllyasviel/control_v11p_sd15_seg"
 
 # High scales: structural fidelity to the original is the whole point.
 CONTROLNET_DEPTH_SCALE = 1.5
 CONTROLNET_CANNY_SCALE = 1.2
+# Seg a bit lower: it biases layout/material more than exact geometry, so too
+# high a scale over-constrains and fights the depth map.
+CONTROLNET_SEG_SCALE = 0.9
 
 # Standard SD 1.5 guidance.
 GUIDANCE_SCALE = 7.5
@@ -61,24 +71,36 @@ def compute_target_size(
 def _load_conditioning_maps(
     data: BrainimgData, target_w: int, target_h: int
 ) -> list[Image.Image]:
-    """Decode the depth + Canny maps and upscale them to the target size."""
+    """Decode the conditioning maps and upscale them to the target size.
+
+    Always returns depth + Canny. If the blueprint carries a segmentation map
+    (newer v0.1 files), it is appended as a third map for the seg ControlNet.
+    """
     depth = b64_to_image(data.depth_map_b64).convert("RGB").resize(
         (target_w, target_h), Image.LANCZOS
     )
     canny = b64_to_image(data.canny_map_b64).convert("RGB").resize(
         (target_w, target_h), Image.NEAREST  # keep edges crisp
     )
-    return [depth, canny]
+    maps = [depth, canny]
+    if getattr(data, "segmentation_map_b64", ""):
+        seg = b64_to_image(data.segmentation_map_b64).convert("RGB").resize(
+            (target_w, target_h), Image.NEAREST  # palette colors must stay crisp
+        )
+        maps.append(seg)
+    return maps
 
 
-def _build_pipeline(device: str, dtype, quantize: bool = False):
-    """Construct the SD1.5 + dual-ControlNet pipeline.
+def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool = False):
+    """Construct the SD1.5 + ControlNet pipeline.
 
     Args:
         device: "cuda", "mps", or "cpu".
         dtype: torch dtype for the device (fp16 on GPU, fp32 on CPU).
         quantize: if True, int8-quantize weights to save memory (useful on
             low-RAM machines). On MPS this is always done regardless.
+        with_seg: if True, add the ADE20K segmentation ControlNet (3rd net)
+            on top of depth + Canny.
     """
     import torch
     from diffusers import (
@@ -100,6 +122,12 @@ def _build_pipeline(device: str, dtype, quantize: bool = False):
             CONTROLNET_CANNY_ID, torch_dtype=load_dtype, variant=variant
         ),
     ]
+    if with_seg:
+        controlnets.append(
+            ControlNetModel.from_pretrained(
+                CONTROLNET_SEG_ID, torch_dtype=load_dtype, variant=variant
+            )
+        )
 
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         SD_MODEL_ID,
@@ -180,16 +208,20 @@ def generate_image(
     )
     n_steps = steps or data.steps
 
+    has_seg = bool(getattr(data, "segmentation_map_b64", ""))
     conditioning = _load_conditioning_maps(data, target_w, target_h)
+    scales = [CONTROLNET_DEPTH_SCALE, CONTROLNET_CANNY_SCALE]
+    if has_seg:
+        scales.append(CONTROLNET_SEG_SCALE)
 
-    pipe, torch = _build_pipeline(device, dtype, quantize=quantize)
+    pipe, torch = _build_pipeline(device, dtype, quantize=quantize, with_seg=has_seg)
 
     gen = torch.Generator(device).manual_seed(data.seed)
     result = pipe(
         prompt=data.prompt,
         negative_prompt=data.negative_prompt,
         image=conditioning,
-        controlnet_conditioning_scale=[CONTROLNET_DEPTH_SCALE, CONTROLNET_CANNY_SCALE],
+        controlnet_conditioning_scale=scales,
         guidance_scale=GUIDANCE_SCALE,
         num_inference_steps=n_steps,
         generator=gen,

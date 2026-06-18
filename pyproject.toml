@@ -1,0 +1,18 @@
+[project]
+name = "brainimg"
+version = "0.1.0"
+description = "Semantic image compression: store the meaning, regenerate the pixels."
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]

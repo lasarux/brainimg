@@ -1,0 +1,19 @@
+# --- MLX stack (captioning) ---
+mlx>=0.31.2
+mlx-vlm>=0.6.3
+
+# --- PyTorch stack (depth + diffusion, Apple Silicon MPS) ---
+torch>=2.3
+torchvision>=0.18
+
+# --- HuggingFace models (depth-anything, stable diffusion, controlnet) ---
+transformers>=4.40
+diffusers>=0.27
+accelerate>=0.30
+# int8 quantization of the UNet/ControlNets on MPS (avoids fp16 NaN -> black image)
+optimum-quanto>=0.2.4
+
+# --- Image / vision utilities ---
+pillow>=10.0
+numpy>=1.24
+opencv-python>=4.8

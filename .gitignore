@@ -31,6 +31,17 @@ recon_*.png
 lenna_recon.png
 lenna_comparison.jpg
 lenna.brainimg
+# Recent Lenna SDXL/SD15/Z-Image sweep artifacts and patched blueprint copies.
+lenna_sd15_dtype_check.png
+lenna_sdxl.png
+lenna_sdxl_512.png
+lenna_sdxl_512_comparison.jpg
+lenna_sdxl_512_with_hue.png
+lenna_sdxl_512_with_hue_comparison.jpg
+lenna_sdxl_comparison.jpg
+lenna_sdxl_fixed_prompt.png
+lenna_fixed_prompt.brainimg
+lenna_with_hue.brainimg
 
 # OS
 .DS_Store

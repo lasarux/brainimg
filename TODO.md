@@ -65,3 +65,15 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       structure regardless, but a wrong caption biases generation. Could try a
       larger VLM or ensemble captions; low priority since structure is what
       drives fidelity.
+
+- [ ] **SDXL hue distribution drift.** SDXL @ 512 outputs land in the
+      orange/yellow band (60-90 deg) when the source is pink/magenta (330-30
+      deg) -- a hue *distribution* shift, not just a mean shift. Brightness
+      and saturation post-processing can't fix this; a global HSV-H rotation
+      can align means but not reshape distributions, and a large enough
+      rotation to chase a different distribution recolors neutrals and skin
+      badly. Per-region hue transfer (segmentation mask + per-region target
+      hue) or histogram matching (LAB space, per-region) would help; not
+      implemented. Workaround: prefer SDXL @ 1024, where the drift is much
+      smaller, or accept SDXL's color choice and treat it as "photorealism
+      interpretation" rather than a bug.

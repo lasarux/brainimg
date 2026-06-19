@@ -206,6 +206,13 @@ pytest                       # format tests, no models needed
   seg mode). Edge detail is slightly lower than the SD 1.5/SDXL three-net
   stack; photorealism is higher. Needs ~18 GB VRAM on GPU or ~18 GB RAM on CPU
   (no offload on a CPU-only box); not for 8 GB Apple Silicon.
+- **SDXL hue drift at small sizes**: SDXL @ 512 can land in a different hue
+  *distribution* than the source (e.g. orange/yellow when the source is
+  pink/magenta). The decoder's brightness/saturation matching cannot correct
+  this — it is a content/palette drift, not a stat drift. SDXL @ 1024 is
+  much closer to the source palette. Workaround: prefer `--model sdxl
+  --size 1024x1024`, or use `--model sd15` when the source's color palette
+  matters most. See TODO.md "SDXL hue distribution drift" for details.
 
 ## Verified results (M1, 8 GB)
 

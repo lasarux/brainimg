@@ -18,6 +18,7 @@ resolution.
 | Canny edges (encoder) | OpenCV | — |
 | Segmentation (encoder) | PyTorch (OneFormer ADE20K) | `shi-labs/oneformer_ade20k_swin_tiny` |
 | Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` (+ `lllyasviel/control_v11p_sd15_seg` when the blueprint has a seg map) |
+| Image generation (decoder, `--model zimage`) | PyTorch + bf16 | `Tongyi-MAI/Z-Image-Turbo` (6B DiT) + `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` (8-step distill) |
 
 Captioning uses the MLX 4-bit model on Apple Silicon (fast, low memory) and
 falls back to the HuggingFace transformers Qwen2.5-VL-7B model on any other
@@ -28,6 +29,42 @@ The segmentation map is an **optional** field (added after the initial v0.1
 release), so older `.brainimg` files without it still decode exactly as before
 — the decoder just uses the two ControlNets (depth + Canny). Newer files carry
 an ADE20K colorized seg map and the decoder adds a third ControlNet for it.
+
+### `--model zimage`: Z-Image-Turbo backend
+
+An alternative decoder backed by Tongyi-MAI's **Z-Image-Turbo** (a 6B
+single-stream DiT) with Alibaba-PAI's **Union ControlNet**. Key differences
+from the SD 1.5/SDXL path:
+
+- **Depth-only conditioning.** The Union ControlNet takes a *single*
+  conditioning image per call (it supports canny/depth/pose/mlsd/hed). We feed
+  the depth map. The blueprint's Canny and segmentation maps are **ignored**
+  on this path — no schema change, they're just unused. This trades a little
+  edge fidelity for Z-Image's photorealism.
+- **bf16 throughout.** Z-Image's native dtype is bfloat16, which sidesteps the
+  MPS fp16 NaN bug entirely. No int8 quantization is used on this path.
+- **8 steps.** The ControlNet is the 8-step-distilled `2.1-8steps` variant
+  (the *lite* 2601/2602 files don't load cleanly under diffusers 0.38 — their
+  widened `control_all_x_embedder` triggers a shape mismatch), so Turbo's
+  sub-second latency is preserved (vs ~20-40 steps for the undistilled 2.1).
+- **~18 GB VRAM minimum on GPU.** The 6B DiT (~12 GB bf16) + 6.4 GB
+  8-step-distilled Union ControlNet don't fit in 8 GB. On `mps` the pipeline
+  uses `enable_model_cpu_offload()` (layers stream between host and device) —
+  slow. On a **CPU-only** box the whole bf16 pipeline is kept resident in host
+  RAM (~18 GB); there is no layer offload trick on CPU (diffusers'
+  `enable_model_cpu_offload` requires an accelerator to move *to*). For the
+  8 GB Apple Silicon target or low-RAM CPU boxes, stay on `--model sd15`.
+- **guidance_scale 0.0.** Turbo is distilled for zero CFG; the `color_style`
+  prefix is prepended unconditionally (Z-Image's Qwen text encoder has a
+  512-token limit vs CLIP's 77).
+
+```bash
+# CUDA: fast and high fidelity (needs ~16 GB VRAM)
+python decoder.py out.brainimg -o recon.png --model zimage --device cuda
+
+# CPU-only: works but slow, needs ~14 GB RAM resident (no offload on CPU)
+python decoder.py out.brainimg -o recon.png --model zimage --device cpu
+```
 
 Encoder and decoder are separate processes, so models are never resident at the
 same time (important on an 8 GB Apple Silicon Mac).
@@ -116,10 +153,13 @@ same image **exactly** (verified: 0 pixel difference between runs).
 | `--device` | Precision | RAM needed | Speed | Fidelity |
 |---|---|---|---|---|
 | `auto` (default) | detects best available | varies | varies | varies |
-| `cpu` | fp32 (no quantization) | ~10 GB | slow (min/image) | **best** |
+| `cpu` | fp32 (no quantization) | ~10 GB | slow (min/image) | **best** (sd15/sdxl) |
 | `cpu --quantize` | int8 weights, fp32 activations | ~5 GB | slow | good |
 | `mps` | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
 | `cuda` | fp16 | ~5 GB | **fast** | good |
+| `--model zimage --device cuda` | bf16 | ~18 GB | **fast** (8 steps) | good (depth-only) |
+| `--model zimage --device mps` | bf16 + cpu-offload | varies | slow | good (depth-only) |
+| `--model zimage --device cpu` | bf16 (resident) | ~18 GB RAM | very slow | good (depth-only) |
 
 Use `--device cpu` on a high-RAM machine for the best reconstruction quality.
 
@@ -161,6 +201,11 @@ pytest                       # format tests, no models needed
 - **Slow on CPU**: minutes per image. `--device cuda` is much faster.
 - **Deterministic given the seed**: re-running with the same seed reproduces
   the same image exactly.
+- **Z-Image path is depth-only**: `--model zimage` ignores the blueprint's
+  Canny and segmentation maps (the Union ControlNet takes one image and has no
+  seg mode). Edge detail is slightly lower than the SD 1.5/SDXL three-net
+  stack; photorealism is higher. Needs ~18 GB VRAM on GPU or ~18 GB RAM on CPU
+  (no offload on a CPU-only box); not for 8 GB Apple Silicon.
 
 ## Verified results (M1, 8 GB)
 

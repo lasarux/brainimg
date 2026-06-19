@@ -1,25 +1,43 @@
 """The decoder: regenerate an image from a .brainimg blueprint.
 
-Loads Stable Diffusion 1.5 with two or three ControlNets and re-paints the
-scene described by the blueprint:
+Loads Stable Diffusion 1.5 (default), SDXL, or Z-Image-Turbo and re-paints the
+scene described by the blueprint.
 
-  * depth (always)        -- lllyasviel/control_v11f1p_sd15_depth
-  * canny (always)        -- lllyasviel/control_v11p_sd15_canny
-  * segmentation (opt.)   -- lllyasviel/control_v11p_sd15_seg, used only when
-    the blueprint carries an ADE20K segmentation map (newer v0.1 files). Older
-    files without it decode exactly as before.
+SD 1.5 / SDXL stack (two or three ControlNets):
+  * depth (always)        -- SD 1.5: lllyasviel/control_v11f1p_sd15_depth
+                             SDXL:   diffusers/controlnet-depth-sdxl-1.0
+  * canny (always)        -- SD 1.5: lllyasviel/control_v11p_sd15_canny
+                             SDXL:   diffusers/controlnet-canny-sdxl-1.0
+  * segmentation (opt.)   -- SD 1.5: lllyasviel/control_v11p_sd15_seg
+                             SDXL:   abovzv/sdxl_segmentation_controlnet_ade20k
+      used only when the blueprint carries an ADE20K segmentation map (newer
+      v0.1 files). Older files without it decode exactly as before.
+
+Z-Image-Turbo stack (single Union ControlNet, depth-only):
+  * depth (only)          -- alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
+                            (2.1-lite-2602-8steps safetensor, distilled for the
+                            8-step Turbo schedule). The Union net accepts one
+                            conditioning image per call (one of canny/depth/
+                            pose/mlsd/hed/scribble/gray); we feed depth because
+                            it carries the most structure. The blueprint's
+                            canny and segmentation maps are *ignored* on this
+                            path (no schema change -- ``segmentation_map_b64``
+                            stays optional). bf16 throughout (Z-Image is a 6B
+                            DiT; bf16 sidesteps the MPS fp16 NaN bug entirely).
 
 Quality post-processing:
   * The stock SD 1.5 VAE is replaced with the fine-tuned ``sd-vae-ft-mse``
     (cleaner decode, better skin/color).
   * After generation, brightness/saturation are matched to the targets stored
     in the blueprint (SD 1.5 tends to over-brighten/over-saturate). A no-op
-    for older files with no stored stats.
+    for older files with no stored stats; harmless on Z-Image.
   * A stored color style prefix ("dark, low-key lighting, red dominant
-    tones", ...) is prepended to the caption when the combined length fits the
-    CLIP 77-token limit.
+    tones", ...) is prepended to the caption. For SD 1.5/SDXL it is prepended
+    only when the combined length fits the CLIP 77-token limit; for Z-Image
+    the Qwen text encoder's 512-token limit is large enough to prepend it
+    unconditionally.
 
-Device strategy:
+Device strategy (SD 1.5 / SDXL):
   * ``cpu``  : full fp32, no quantization. Best fidelity, slow (minutes/image).
     Needs ~10 GB RAM. Pass ``--quantize`` to int8-quantize the weights and
     fit in ~5 GB at a small quality cost.
@@ -27,6 +45,14 @@ Device strategy:
     the UNet and ControlNets are int8-quantized (weights + activations) to
     avoid fp16 matmuls. Fits in 8 GB.
   * ``cuda`` (NVIDIA): fp16, works correctly. Fast and high fidelity.
+
+Z-Image-Turbo device strategy:
+  * bf16 everywhere (native dtype). No int8 quantization on this path.
+  * ``cuda``: ``pipe.to("cuda")``. Needs ~16 GB VRAM (6B DiT + 2 GB lite
+    ControlNet). Fast (~8 steps).
+  * ``mps`` / ``cpu``: ``enable_model_cpu_offload()`` so layers move between
+    host and device. Slower but avoids OOM. The 8 GB Apple Silicon target is
+    not supported for Z-Image -- use ``--model sd15`` there.
 """
 
 from __future__ import annotations
@@ -39,30 +65,98 @@ from .device import free_torch, get_dtype, get_torch_device
 from .extract import b64_to_image, brightness_saturation_of
 from .format import BrainimgData, load_brainimg
 
-SD_MODEL_ID = "stable-diffusion-v1-5/stable-diffusion-v1-5"
-VAE_MODEL_ID = "stabilityai/sd-vae-ft-mse"
-CONTROLNET_DEPTH_ID = "lllyasviel/control_v11f1p_sd15_depth"
-CONTROLNET_CANNY_ID = "lllyasviel/control_v11p_sd15_canny"
-CONTROLNET_SEG_ID = "lllyasviel/control_v11p_sd15_seg"
+# --- model stacks ----------------------------------------------------------- #
+# Two base models are supported, gated by the `model` arg ("sd15" default,
+# "sdxl" opt-in). Each carries its own base + VAE + ControlNet ids and its own
+# sensible defaults (SDXL trains at 1024 and uses different scale ranges).
+SD15_MODEL_ID = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+SD15_VAE_ID = "stabilityai/sd-vae-ft-mse"
+SD15_CONTROLNET_DEPTH_ID = "lllyasviel/control_v11f1p_sd15_depth"
+SD15_CONTROLNET_CANNY_ID = "lllyasviel/control_v11p_sd15_canny"
+SD15_CONTROLNET_SEG_ID = "lllyasviel/control_v11p_sd15_seg"
 
-# High scales: structural fidelity to the original is the whole point.
-CONTROLNET_DEPTH_SCALE = 1.5
-CONTROLNET_CANNY_SCALE = 1.2
+SDXL_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
+SDXL_VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
+SDXL_CONTROLNET_DEPTH_ID = "diffusers/controlnet-depth-sdxl-1.0"
+SDXL_CONTROLNET_CANNY_ID = "diffusers/controlnet-canny-sdxl-1.0"
+# An SDXL ADE20K seg ControlNet now exists (the xinsir one returned 401 at the
+# time TODO.md was written; abovzv's is ungated and safetensors-only).
+SDXL_CONTROLNET_SEG_ID = "abovzv/sdxl_segmentation_controlnet_ade20k"
+
+DEFAULT_MODEL = "sd15"
+
+# Per-model generation defaults. ControlNet scales are high: structural
+# fidelity to the original is the whole point. SDXL Conditioning scales
+# tend to run a bit lower than SD 1.5 for comparable visual grip.
+SD15_CONTROLNET_DEPTH_SCALE = 1.5
+SD15_CONTROLNET_CANNY_SCALE = 1.2
 # Seg a bit lower: it biases layout/material more than exact geometry, so too
 # high a scale over-constrains and fights the depth map.
-CONTROLNET_SEG_SCALE = 0.9
-
-# Standard SD 1.5 guidance.
-GUIDANCE_SCALE = 7.5
-
-# CLIP token limit for SD 1.5. The style prefix is only prepended to the
-# prompt if the combined length still fits, otherwise the caption alone is
-# used so it is never truncated.
-CLIP_MAX_TOKENS = 77
-
+SD15_CONTROLNET_SEG_SCALE = 0.9
+SD15_GUIDANCE_SCALE = 7.5
 # Default generation side length. 512 is reasonable on a machine with plenty
 # of RAM; 256 is the safe ceiling on an 8 GB Apple Silicon Mac with int8.
-MAX_DEFAULT_SIDE = 512
+SD15_MAX_DEFAULT_SIDE = 512
+
+SDXL_CONTROLNET_DEPTH_SCALE = 1.0
+SDXL_CONTROLNET_CANNY_SCALE = 0.8
+SDXL_CONTROLNET_SEG_SCALE = 0.6
+SDXL_GUIDANCE_SCALE = 7.0
+# SDXL is trained at 1024; smaller sizes hurt quality.
+SDXL_MAX_DEFAULT_SIDE = 1024
+
+# --- Z-Image-Turbo stack ---------------------------------------------------- #
+# A 6B single-stream DiT (Tongyi-MAI/Z-Image-Turbo) + the Alibaba-PAI Union
+# ControlNet. The Union net is a single network that accepts one conditioning
+# image per call; the conditioning *type* (canny/depth/pose/mlsd/hed) is
+# whatever the preprocessor produced -- we feed depth because it carries the
+# most structural information. canny + segmentation from the blueprint are
+# *not* used on this path (the Union net has no seg mode and the diffusers
+# ZImageControlNetPipeline takes a single ``control_image``).
+# bf16 is Z-Image's native dtype and also sidesteps the MPS fp16 NaN bug.
+#
+# Variant note: the *lite* 2.1-2601/2602-8steps files (3 control blocks, ~2 GB)
+# look attractive but their ``control_all_x_embedder`` ships a widened input
+# dim (132 vs diffusers' expected 64) -- ``ZImageControlNetModel.from_single_file``
+# rejects them with a shape-mismatch ValueError on diffusers 0.38. The full
+# 2.1-8steps file (15 control blocks, ~6.4 GB) loads cleanly and is the
+# 8-step-distilled variant that preserves Turbo's sub-second latency. v1.0
+# (5 control blocks, ~3.1 GB) also loads but is not distilled -- it needs
+# ~20-40 steps and is much slower.
+ZIMAGE_MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
+ZIMAGE_CONTROLNET_REPO = "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1"
+ZIMAGE_CONTROLNET_FILE = "Z-Image-Turbo-Fun-Controlnet-Union-2.1-8steps.safetensors"
+# Union ControlNet scale sits in the 0.65-1.0 band per the model card; depth is
+# the dominant structural cue so we lean toward the upper end.
+ZIMAGE_CONTROLNET_DEPTH_SCALE = 0.85
+# Turbo is distilled for guidance_scale == 0.0 (no CFG). The user can override
+# via --cfg but the result is untested and likely worse.
+ZIMAGE_GUIDANCE_SCALE = 0.0
+# 9 ``num_inference_steps`` -> 8 DiT forward passes (Turbo schedule).
+ZIMAGE_DEFAULT_STEPS = 9
+# Z-Image is trained at 1024. Generate at the original's aspect ratio capped to
+# a 1024 long side, rounded to 8 (VAE requirement).
+ZIMAGE_MAX_DEFAULT_SIDE = 1024
+# Qwen text-encoder max prompt length. Much larger than CLIP's 77, so the
+# color_style prefix is prepended unconditionally on this path.
+ZIMAGE_MAX_TOKENS = 512
+
+# Backwards-compat single-name constants (callers below use the helpers).
+SD_MODEL_ID = SD15_MODEL_ID
+VAE_MODEL_ID = SD15_VAE_ID
+CONTROLNET_DEPTH_ID = SD15_CONTROLNET_DEPTH_ID
+CONTROLNET_CANNY_ID = SD15_CONTROLNET_CANNY_ID
+CONTROLNET_SEG_ID = SD15_CONTROLNET_SEG_ID
+CONTROLNET_DEPTH_SCALE = SD15_CONTROLNET_DEPTH_SCALE
+CONTROLNET_CANNY_SCALE = SD15_CONTROLNET_CANNY_SCALE
+CONTROLNET_SEG_SCALE = SD15_CONTROLNET_SEG_SCALE
+GUIDANCE_SCALE = SD15_GUIDANCE_SCALE
+MAX_DEFAULT_SIDE = SD15_MAX_DEFAULT_SIDE
+
+# CLIP token limit (both SD 1.5 and SDXL use the same CLIP text encoders' 77
+# token cap). The style prefix is only prepended to the prompt if the combined
+# length fits, otherwise the caption alone is used so it is never truncated.
+CLIP_MAX_TOKENS = 77
 
 
 def _match_color_statistics(
@@ -122,8 +216,65 @@ def _match_color_statistics(
     return out
 
 
+def _model_config(model: str) -> dict:
+    """Return the per-model stack config (ids + defaults) for *model*.
+
+    ``model`` is "sd15", "sdxl", or "zimage". Centralized so callers don't
+    sprinkle conditionals; the SD 1.5 path keeps the historical defaults.
+    Z-Image differs structurally: a single Union ControlNet fed one depth
+    image (no canny, no seg) and a Qwen text encoder (512 tokens vs CLIP 77).
+    """
+    if model == "zimage":
+        return {
+            "base_id": ZIMAGE_MODEL_ID,
+            "controlnet_repo": ZIMAGE_CONTROLNET_REPO,
+            "controlnet_file": ZIMAGE_CONTROLNET_FILE,
+            # No separate depth/canny/seg ids: the Union net is a single file.
+            "depth_scale": ZIMAGE_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": None,
+            "seg_scale": None,
+            "guidance": ZIMAGE_GUIDANCE_SCALE,
+            "max_side": ZIMAGE_MAX_DEFAULT_SIDE,
+            "default_steps": ZIMAGE_DEFAULT_STEPS,
+            "max_tokens": ZIMAGE_MAX_TOKENS,
+        }
+    if model == "sdxl":
+        return {
+            "base_id": SDXL_MODEL_ID,
+            "vae_id": SDXL_VAE_ID,
+            "depth_id": SDXL_CONTROLNET_DEPTH_ID,
+            "canny_id": SDXL_CONTROLNET_CANNY_ID,
+            "seg_id": SDXL_CONTROLNET_SEG_ID,
+            "depth_scale": SDXL_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": SDXL_CONTROLNET_CANNY_SCALE,
+            "seg_scale": SDXL_CONTROLNET_SEG_SCALE,
+            "guidance": SDXL_GUIDANCE_SCALE,
+        "max_side": SDXL_MAX_DEFAULT_SIDE,
+        "vae_fp16_variant": None,
+        "seg_fp16_variant": None,
+        # abovzv's seg net uses a non-standard weight filename; diffusers
+        # auto-looks for diffusion_pytorch_model.safetensors, so name it.
+        "seg_weight_name": "sdxl_segmentation_ade20k_controlnet.safetensors",
+    }
+    return {
+        "base_id": SD15_MODEL_ID,
+        "vae_id": SD15_VAE_ID,
+        "depth_id": SD15_CONTROLNET_DEPTH_ID,
+        "canny_id": SD15_CONTROLNET_CANNY_ID,
+        "seg_id": SD15_CONTROLNET_SEG_ID,
+        "depth_scale": SD15_CONTROLNET_DEPTH_SCALE,
+        "canny_scale": SD15_CONTROLNET_CANNY_SCALE,
+        "seg_scale": SD15_CONTROLNET_SEG_SCALE,
+        "guidance": SD15_GUIDANCE_SCALE,
+        "max_side": SD15_MAX_DEFAULT_SIDE,
+        "vae_fp16_variant": None,
+        "seg_fp16_variant": "fp16",
+        "seg_weight_name": None,
+    }
+
+
 def compute_target_size(
-    orig_w: int, orig_h: int, override: str | None = None
+    orig_w: int, orig_h: int, override: str | None = None, max_side: int = MAX_DEFAULT_SIDE
 ) -> tuple[int, int]:
     """Pick a generation size, rounded to a multiple of 8 (SD requirement)."""
     if override:
@@ -133,7 +284,7 @@ def compute_target_size(
         except ValueError as exc:
             raise ValueError(f"--size expects WxH, got {override!r}") from exc
     else:
-        scale = MAX_DEFAULT_SIDE / max(orig_w, orig_h)
+        scale = max_side / max(orig_w, orig_h)
         w, h = int(round(orig_w * scale)), int(round(orig_h * scale))
 
     w = max(8, (w // 8) * 8)
@@ -164,8 +315,14 @@ def _load_conditioning_maps(
     return maps
 
 
-def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool = False):
-    """Construct the SD1.5 + ControlNet pipeline.
+def _build_pipeline(
+    device: str,
+    dtype,
+    quantize: bool = False,
+    with_seg: bool = False,
+    model: str = DEFAULT_MODEL,
+):
+    """Construct the base + ControlNet pipeline for the chosen model.
 
     Args:
         device: "cuda", "mps", or "cpu".
@@ -174,37 +331,56 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
             low-RAM machines). On MPS this is always done regardless.
         with_seg: if True, add the ADE20K segmentation ControlNet (3rd net)
             on top of depth + Canny.
+        model: "sd15" (default) or "sdxl". SDXL is trained at 1024 and uses
+            fp16-variant ControlNets from diffusers + a non-variant seg net.
     """
     import torch
     from diffusers import (
         AutoencoderKL,
         ControlNetModel,
         StableDiffusionControlNetPipeline,
+        StableDiffusionXLControlNetPipeline,
         UniPCMultistepScheduler,
     )
+
+    cfg = _model_config(model)
+    if model == "sdxl":
+        pipe_cls = StableDiffusionXLControlNetPipeline
+    else:
+        pipe_cls = StableDiffusionControlNetPipeline
 
     # Always load from the fp16 checkpoint (smaller download) and upcast
     # to fp32 in memory when needed.
     load_dtype = torch.float16
     variant = "fp16"
 
+    cn_load_kwargs = {"torch_dtype": load_dtype, "variant": variant}
     controlnets = [
-        ControlNetModel.from_pretrained(
-            CONTROLNET_DEPTH_ID, torch_dtype=load_dtype, variant=variant
-        ),
-        ControlNetModel.from_pretrained(
-            CONTROLNET_CANNY_ID, torch_dtype=load_dtype, variant=variant
-        ),
+        ControlNetModel.from_pretrained(cfg["depth_id"], **cn_load_kwargs),
+        ControlNetModel.from_pretrained(cfg["canny_id"], **cn_load_kwargs),
     ]
     if with_seg:
-        controlnets.append(
-            ControlNetModel.from_pretrained(
-                CONTROLNET_SEG_ID, torch_dtype=load_dtype, variant=variant
-            )
-        )
+        # The SD 1.5 seg net uses the standard diffusers layout with an fp16
+        # variant. The SDXL seg net (abovzv) ships a single checkpoint-format
+        # safetensors (not a diffusers repo), so it loads via from_single_file.
+        if cfg["seg_weight_name"]:
+            from huggingface_hub import hf_hub_download
 
-    pipe = StableDiffusionControlNetPipeline.from_pretrained(
-        SD_MODEL_ID,
+            seg_file = hf_hub_download(cfg["seg_id"], cfg["seg_weight_name"])
+            seg_config = hf_hub_download(cfg["seg_id"], "config.json")
+            controlnets.append(
+                ControlNetModel.from_single_file(
+                    seg_file, config=seg_config, torch_dtype=load_dtype
+                )
+            )
+        else:
+            seg_kwargs = {"torch_dtype": load_dtype, "variant": cfg["seg_fp16_variant"]}
+            controlnets.append(
+                ControlNetModel.from_pretrained(cfg["seg_id"], **seg_kwargs)
+            )
+
+    pipe = pipe_cls.from_pretrained(
+        cfg["base_id"],
         controlnet=controlnets,
         torch_dtype=load_dtype,
         variant=variant,
@@ -213,12 +389,13 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
         requires_safety_checker=False,
     )
 
-    # Swap the stock SD 1.5 VAE for the fine-tuned MSE VAE: cleaner decode,
-    # better skin tones and colors, fewer washed-out highlights. The VAE is
-    # tiny (~335 MB) and produces a noticeable quality jump at no runtime cost.
-    pipe.vae = AutoencoderKL.from_pretrained(
-        VAE_MODEL_ID, torch_dtype=load_dtype
-    )
+    # Swap the stock VAE for a fine-tuned one: cleaner decode, better skin
+    # tones and colors, fewer washed-out highlights. SD 1.5 uses sd-vae-ft-mse
+    # (fp16 variant); SDXL uses madebyollin's fp16-fix (no variant).
+    vae_kwargs = {"torch_dtype": load_dtype}
+    if cfg["vae_fp16_variant"]:
+        vae_kwargs["variant"] = cfg["vae_fp16_variant"]
+    pipe.vae = AutoencoderKL.from_pretrained(cfg["vae_id"], **vae_kwargs)
 
     # CPU: upcast to fp32 BEFORE moving to device (diffusers refuses fp16 on CPU).
     if device == "cpu":
@@ -268,25 +445,86 @@ def _build_pipeline(device: str, dtype, quantize: bool = False, with_seg: bool =
     return pipe, torch
 
 
-def _build_prompt(data: BrainimgData, tokenizer) -> str:
-    """Prepend the stored color style prefix to the caption if it fits CLIP.
+def _build_zimage_pipeline(device: str):
+    """Construct the Z-Image-Turbo + Union ControlNet pipeline.
+
+    Distinct from the SD 1.5/SDXL path: a single Union ControlNet (one
+    conditioning image, depth), bf16 throughout (no int8 quant -- bf16 is
+    Z-Image's native dtype and sidesteps the MPS fp16 NaN bug), and the
+    diffusers FlowMatch scheduler that ships with the model.
+
+    Memory strategy:
+      * cuda: ``pipe.to("cuda")``. ~18 GB VRAM floor (6B DiT ~12 GB + 6.4 GB
+        8-step-distilled Union ControlNet).
+      * mps: ``enable_model_cpu_offload()`` streams layers host<->device per
+        step. Slower but avoids OOM. The 8 GB Apple Silicon target is *not*
+        supported on this path -- use ``--model sd15`` there.
+      * cpu: keep the whole pipeline resident in host RAM (``pipe.to("cpu")``).
+        ``enable_model_cpu_offload`` is *not* an option here -- it raises
+        ``RuntimeError("requires accelerator, but not found")`` on a CPU-only
+        box (diffusers' offload hooks need an accelerator to move *to*). So
+        Z-Image on CPU needs roughly the model size in RAM: ~12 GB for the bf16
+        6B DiT + ~6.4 GB for the 8-step ControlNet. If the host has the RAM it
+        runs (slowly); if not, the user must fall back to ``--model sd15``. The
+        ``--quantize`` flag is intentionally not honored on this path (Z-Image
+        has no tested int8 story here, unlike the SD 1.5 UNet).
+
+    Returns ``(pipe, torch)`` to match the SD 1.5/SDXL builder signature.
+    """
+    import torch
+    from diffusers import ZImageControlNetModel, ZImageControlNetPipeline
+    from huggingface_hub import hf_hub_download
+
+    cfg = _model_config("zimage")
+    load_dtype = torch.bfloat16
+
+    controlnet = ZImageControlNetModel.from_single_file(
+        hf_hub_download(cfg["controlnet_repo"], cfg["controlnet_file"]),
+        torch_dtype=load_dtype,
+    )
+    pipe = ZImageControlNetPipeline.from_pretrained(
+        cfg["base_id"],
+        controlnet=controlnet,
+        torch_dtype=load_dtype,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        # Stream layers host<->MPS per step. bf16 is safe on MPS (no fp16 NaN
+        # issue for Z-Image), but VRAM is the limit on small Apple Silicon.
+        pipe.enable_model_cpu_offload()
+    else:
+        # Pure CPU: enable_model_cpu_offload() raises RuntimeError without an
+        # accelerator, so just keep everything resident in host RAM. Needs
+        # roughly the bf16 model size in RAM (~14 GB for the lite stack).
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
+def _build_prompt(data: BrainimgData, tokenizer, max_tokens: int = CLIP_MAX_TOKENS) -> str:
+    """Prepend the stored color style prefix to the caption if it fits.
 
     The style prefix ("dark, low-key lighting, red dominant tones", ...) is
     extracted by the encoder and stored in ``data.extra['color_style']``.
     Prepending it weights the mood first -- the front of the prompt has the
-    strongest CLIP weight. It is only prepended when the combined length fits
-    within the CLIP token limit so the caption itself is never truncated.
-    Older files without a stored color_style use the caption verbatim.
+    strongest encoder weight. It is prepended when the combined length fits
+    within the model's token limit so the caption itself is never truncated.
+
+    SD 1.5 / SDXL use CLIP (77 tokens); Z-Image uses a Qwen text encoder with a
+    512-token limit, where the prefix effectively always fits. Older files
+    without a stored color_style use the caption verbatim.
     """
     style = (data.extra or {}).get("color_style", "")
     if not style:
         return data.prompt
     combined = f"{style}, {data.prompt}"
     try:
-        n = len(tokenizer(combined, max_length=CLIP_MAX_TOKENS)["input_ids"])
+        n = len(tokenizer(combined, max_length=max_tokens)["input_ids"])
     except Exception:
         return data.prompt
-    if n <= CLIP_MAX_TOKENS:
+    if n <= max_tokens:
         return combined
     return data.prompt
 
@@ -301,36 +539,82 @@ def generate_image(
     depth_scale: float | None = None,
     canny_scale: float | None = None,
     seg_scale: float | None = None,
+    model: str = DEFAULT_MODEL,
 ) -> Image.Image:
     """Regenerate a single image from *data*.
 
     Args:
         device_override: "cpu", "mps", "cuda", or None (auto-detect).
-        quantize: int8-quantize weights on CPU to save memory (small quality cost).
-        guidance_scale: override the classifier-free guidance scale (default 7.5).
+        quantize: int8-quantize weights on CPU to save memory (small quality
+            cost). SD 1.5/SDXL only; ignored for Z-Image (bf16, no quant).
+        guidance_scale: override the classifier-free guidance scale. Defaults
+            are per-model (SD 1.5: 7.5, SDXL: 7.0, Z-Image: 0.0).
         depth_scale / canny_scale / seg_scale: override the ControlNet
-            conditioning scales. Defaults are the module constants.
+            conditioning scales. Defaults are per-model. For Z-Image only
+            depth_scale applies (canny/seg are ignored on that path).
+        model: "sd15" (default), "sdxl", or "zimage". SDXL needs ~7 GB base +
+            3 ControlNets at 1024. Z-Image is a 6B bf16 DiT needing ~16 GB VRAM
+            and uses a single depth conditioning image (canny/seg ignored).
     """
+    if model == "zimage":
+        return _generate_zimage(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+        )
+    return _generate_sd(
+        data,
+        size=size,
+        steps=steps,
+        device_override=device_override,
+        quantize=quantize,
+        guidance_scale=guidance_scale,
+        depth_scale=depth_scale,
+        canny_scale=canny_scale,
+        seg_scale=seg_scale,
+        model=model,
+    )
+
+
+def _generate_sd(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    quantize: bool,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+    canny_scale: float | None,
+    seg_scale: float | None,
+    model: str,
+) -> Image.Image:
+    """SD 1.5 / SDXL path: depth + canny (+ optional seg) ControlNets."""
     device = device_override or get_torch_device()
     dtype = get_dtype(device)
+    cfg = _model_config(model)
 
     target_w, target_h = compute_target_size(
-        data.original_width, data.original_height, size
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
     )
     n_steps = steps or data.steps
 
     has_seg = bool(getattr(data, "segmentation_map_b64", ""))
     conditioning = _load_conditioning_maps(data, target_w, target_h)
     scales = [
-        depth_scale if depth_scale is not None else CONTROLNET_DEPTH_SCALE,
-        canny_scale if canny_scale is not None else CONTROLNET_CANNY_SCALE,
+        depth_scale if depth_scale is not None else cfg["depth_scale"],
+        canny_scale if canny_scale is not None else cfg["canny_scale"],
     ]
     if has_seg:
-        scales.append(seg_scale if seg_scale is not None else CONTROLNET_SEG_SCALE)
+        scales.append(seg_scale if seg_scale is not None else cfg["seg_scale"])
 
-    pipe, torch = _build_pipeline(device, dtype, quantize=quantize, with_seg=has_seg)
+    pipe, torch = _build_pipeline(
+        device, dtype, quantize=quantize, with_seg=has_seg, model=model
+    )
 
-    prompt = _build_prompt(data, pipe.tokenizer)
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=CLIP_MAX_TOKENS)
 
     gen = torch.Generator(device).manual_seed(data.seed)
     result = pipe(
@@ -338,15 +622,76 @@ def generate_image(
         negative_prompt=data.negative_prompt,
         image=conditioning,
         controlnet_conditioning_scale=scales,
-        guidance_scale=guidance_scale if guidance_scale is not None else GUIDANCE_SCALE,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
         num_inference_steps=n_steps,
         generator=gen,
     )
     image: Image.Image = result.images[0]
 
-    # Post-process brightness/saturation to match the stored targets. SD 1.5
-    # tends to over-brighten/over-saturate; the blueprint carries the original
-    # stats so we can correct it. A no-op for old files (targets == 0.0).
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_zimage(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+) -> Image.Image:
+    """Z-Image-Turbo path: single Union ControlNet fed the depth map.
+
+    The blueprint's canny and segmentation maps are *ignored* here -- the
+    Union net accepts one conditioning image and has no seg mode. No schema
+    change: ``segmentation_map_b64`` stays optional and is simply unused.
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config("zimage")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    # Ignore the file's stored ``steps`` (tuned for SD 1.5's 20-30 step range) --
+    # Z-Image-Turbo is distilled for 8-9 steps and over-stepping a distilled
+    # model hurts quality. Only an explicit ``--steps`` overrides the zimage
+    # default.
+    n_steps = steps or cfg["default_steps"]
+
+    # Only depth is fed to the Union ControlNet. canny/seg from the blueprint
+    # are deliberately unused on this path.
+    depth = b64_to_image(data.depth_map_b64).convert("RGB").resize(
+        (target_w, target_h), Image.LANCZOS
+    )
+    scale = depth_scale if depth_scale is not None else cfg["depth_scale"]
+
+    pipe, torch = _build_zimage_pipeline(device)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    # Z-Image Turbo is distilled for guidance_scale == 0.0. The generator
+    # lives on the host when cpu-offloaded; pin it to cpu for mps/cpu paths.
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        prompt=prompt,
+        negative_prompt=data.negative_prompt,
+        control_image=depth,
+        controlnet_conditioning_scale=scale,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
+    # Harmless on Z-Image (no-op when targets == 0.0); corrects any color drift.
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation
     )
@@ -367,6 +712,7 @@ def decode_brainimg(
     depth_scale: float | None = None,
     canny_scale: float | None = None,
     seg_scale: float | None = None,
+    model: str = DEFAULT_MODEL,
 ) -> tuple[BrainimgData, Image.Image]:
     """Read *path*, regenerate the image, save it to *out_path*."""
     data = load_brainimg(path)
@@ -380,6 +726,7 @@ def decode_brainimg(
         depth_scale=depth_scale,
         canny_scale=canny_scale,
         seg_scale=seg_scale,
+        model=model,
     )
 
     out_path = Path(out_path)

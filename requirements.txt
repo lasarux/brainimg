@@ -8,7 +8,7 @@ torchvision>=0.18
 
 # --- HuggingFace models (depth-anything, stable diffusion, controlnet) ---
 transformers>=4.40
-diffusers>=0.27
+diffusers>=0.38  # 0.38 ships Z-Image (ZImageControlNetPipeline + ZImageControlNetModel)
 accelerate>=0.30
 # int8 quantization of the UNet/ControlNets on MPS (avoids fp16 NaN -> black image)
 optimum-quanto>=0.2.4

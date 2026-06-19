@@ -26,15 +26,36 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 
 ## Tier 3 — big lift (separate project)
 
-- [ ] **SDXL base model.** Swap `stable-diffusion-v1-5` for
+- [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
+      (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
+      (full 2.1-8steps, depth-only). Differs from the SD path:
+        * **Depth-only conditioning.** The Union ControlNet takes one image per
+          call; the blueprint's canny + seg maps are ignored (no schema change).
+        * bf16 everywhere (sidesteps the MPS fp16 NaN bug); no `optimum.quanto`.
+        * guidance_scale 0.0 (Turbo-distilled); 8 steps; Qwen 512-token encoder
+          (color_style prefix prepended unconditionally).
+        * ~18 GB VRAM on GPU; ~18 GB RAM resident on CPU (no offload trick on
+          CPU -- `enable_model_cpu_offload` needs an accelerator). 8 GB Apple
+          Silicon should use `sd15`.
+        * The *lite* 2.1-2601/2602-8steps files (~2 GB) are rejected by diffusers
+          0.38 (widened `control_all_x_embedder`, shape mismatch); the full
+          2.1-8steps (~6.4 GB) loads cleanly and is what the code pins.
+      Schema-unchanged, encoder-untouched. Verified end-to-end on CPU (pipeline
+      constructs, generation runs). Quality vs sd15/sdxl not yet benchmarked.
+- [x] **SDXL base model.** Swap `stable-diffusion-v1-5` for
       `stabilityai/stable-diffusion-xl-base-1.0` +
-      `diffusers/controlnet-{depth,canny}-sdxl-1.0`. Much higher quality, but:
-        * ~5-10x slower on CPU, heavier download (~7 GB base).
-        * Different default size (1024) and scale ranges.
-        * **Loses the seg ControlNet** — no reliable SDXL ADE20K seg net
-          (`xinsir/controlnet-sdxl-segmentation-ade20k` returned 401 on the
-          Hub). Would drop back to 2-ControlNet unless a seg net is found.
-      Worth gating behind `--model sdxl` rather than replacing SD 1.5.
+      `diffusers/controlnet-{depth,canny}-sdxl-1.0`. Gated behind
+      `--model sdxl` (SD 1.5 stays the default). Much higher quality, but:
+        * ~5-10x slower on CPU (~17 min/image at 1024 fp32), heavier download
+          (~7 GB base + ~2.4 GB per ControlNet).
+        * Default size 1024; Conditioning scales run lower than SD 1.5
+          (depth 1.0, canny 0.8, seg 0.6, cfg 7.0).
+        * **Seg ControlNet now supported**: `abovzv/sdxl_segmentation_controlnet_ade20k`
+          (ungated) loads via `ControlNetModel.from_single_file` since it ships a
+          checkpoint-format safetensors, not a diffusers repo layout. The old
+          xinsir 401 blocker is gone.
+      Verified on lenna.brainimg: 1024x1024 fp32, deterministic (identical md5
+      across runs), color stats match targets. Scale tuning still TODO on a GPU.
 
 ## Known issues (not pure decode-quality)
 

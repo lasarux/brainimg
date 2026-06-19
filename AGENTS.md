@@ -32,6 +32,12 @@ for the full project description and `TODO.md` for planned decode-quality work.
 - `encoder.py` / `decoder.py` are the CLI entrypoints; the `brainimg/` package holds
   `format.py` (schema, ML-free), `device.py` (torch/mlx device + memory helpers),
   `extract.py` (encoder stages), `generate.py` (SD + ControlNet decoder).
+- `brainimg/generate.py` has three decoder backends gated by `--model`:
+  `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
+  and `zimage` (Z-Image-Turbo 6B DiT + single Union ControlNet, depth-only).
+  The zimage path lives in `_generate_zimage` / `_build_zimage_pipeline`; the
+  SD path in `_generate_sd` / `_build_pipeline`. Schema is unchanged — zimage
+  simply ignores the canny/seg maps in the blueprint.
 - **Encoder and decoder must stay separate processes** — models are never resident
   together (8 GB Apple Silicon constraint). Memory is released between heavy stages
   via `free_torch()` / `free_mlx()`.
@@ -51,13 +57,31 @@ for the full project description and `TODO.md` for planned decode-quality work.
   not real source and cause `ruff` errors. Do not edit them; ideally remove + gitignore.
 - **MPS fp16 NaN bug**: SD 1.5 fp16 matmuls produce NaNs (black frame) on Apple Silicon.
   The decoder int8-quantizes UNet + ControlNets via `optimum.quanto`; the VAE runs fp32.
-  Don't "fix" this by switching MPS to fp16.
+  Don't "fix" this by switching MPS to fp16. **Z-Image is exempt**: it runs bf16
+  everywhere (its native dtype) and is not int8-quantized; the NaN bug is an SD 1.5
+  fp16-specific issue, not a general bf16 issue on MPS.
 - The decoder swaps the stock SD 1.5 VAE for `sd-vae-ft-mse` and post-processes
   brightness/saturation to match stored targets — these are intentional quality fixes,
   not noise. The color-style prefix is prepended to the caption **only** if it fits the
-  CLIP 77-token limit.
+  CLIP 77-token limit (SD 1.5/SDXL); for Z-Image the Qwen encoder's 512-token limit is
+  large enough that the prefix is prepended unconditionally.
 - Captioner can misidentify scenes (e.g. dark hair read as a hat); conditioning maps
   (depth/canny/seg) drive fidelity, so a wrong caption is lower-impact than it looks.
+- **Z-Image is depth-only**: `--model zimage` feeds only the depth map to the Union
+  ControlNet. The blueprint's canny and seg maps are ignored (no schema change).
+  `optimum.quanto` is not used on this path; on `mps` `enable_model_cpu_offload()`
+  handles memory, but on a **CPU-only** box the whole bf16 pipeline is kept
+  resident in host RAM (~18 GB) -- `enable_model_cpu_offload` raises
+  `RuntimeError` without an accelerator to offload *to*, so the zimage CPU path
+  calls `pipe.to("cpu")` directly. 8 GB Apple Silicon is not supported for
+  Z-Image -- use `sd15`.
+- **Z-Image ControlNet file choice**: the *lite* 2.1-2601/2602-8steps
+  safetensors look attractive (~2 GB) but their widened `control_all_x_embedder`
+  (input dim 132 vs diffusers' expected 64) is rejected by
+  `ZImageControlNetModel.from_single_file` on diffusers 0.38 with a
+  shape-mismatch ValueError. The full `2.1-8steps` file (~6.4 GB, 5 control
+  types) loads cleanly and is what the code pins. Re-evaluate if a future
+  diffusers release adds the lite configs.
 
 ## Conventions
 

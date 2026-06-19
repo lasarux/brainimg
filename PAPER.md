@@ -419,7 +419,7 @@ can edit the caption, mood prefix, or conditioning scales and re-decode to
 relight or re-pose the scene—an early hint of the "edit the recipe, not the
 pixels" property of the Semantic-Relational Field paradigm.
 
-**Determinism.** Stored seed + fixed decoder ⇒ bit-identical re-decode. This
+**Determinism.** Stored seed + fixed decoder $\Rightarrow$ bit-identical re-decode. This
 addresses the usual "hallucination is non-deterministic" objection to
 generative codecs: within a fixed decoder version, a file *is* a stable image.
 

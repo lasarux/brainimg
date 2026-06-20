@@ -82,14 +82,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model",
-        choices=["sd15", "sdxl", "zimage"],
+        choices=["sd15", "sdxl", "zimage", "flux-depth", "flux-canny"],
         default="sd15",
         help="base diffusion model: 'sd15' (default, ~3.5 GB, 512) or 'sdxl' "
         "(~7 GB base + 3 ControlNets, 1024, ~5-10x slower on CPU). The seg "
         "ControlNet is supported on both. 'zimage' uses Tongyi-MAI/Z-Image-Turbo "
         "(6B bf16 DiT) + the alibaba-pai Union ControlNet (depth-only; canny "
         "and seg from the blueprint are ignored). Needs ~16 GB VRAM; 8 GB "
-        "Apple Silicon should use 'sd15'. 8 steps, fast on CUDA.",
+        "Apple Silicon should use 'sd15'. 8 steps, fast on CUDA. "
+        "'flux-depth' uses FLUX.1-Depth-dev (~22 GB resident; pass --quantize "
+        "for FP8 ~12 GB) and feeds the blueprint's depth map; 'flux-canny' is "
+        "the same but with FLUX.1-Canny-dev + the canny map. Both ignore the "
+        "other map and any seg map (channel-concat control, one image).",
     )
     args = parser.parse_args(argv)
 
@@ -105,7 +109,17 @@ def main(argv: list[str] | None = None) -> int:
         else (get_torch_device() if args.device == "auto" else args.device)
     )
 
-    if args.model == "zimage":
+    if args.model in ("flux-depth", "flux-canny"):
+        # FLUX is bf16; --quantize FP8's the transformer + T5 (the big two).
+        if args.quantize:
+            mode = "bf16 + FP8 weights (transformer + T5)"
+        elif device == "cuda":
+            mode = "bf16"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload"
+        else:
+            mode = "bf16 (resident in RAM, ~22 GB)"
+    elif args.model == "zimage":
         # bf16 throughout. cuda: resident. mps: layers stream host<->device.
         # cpu: whole pipeline resident in host RAM (no offload -- diffusers'
         # enable_model_cpu_offload requires an accelerator to move *to*).
@@ -124,16 +138,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Decoding {path} on {device} [{mode}] model={args.model} ...")
     print(f"  prompt : {data.prompt}")
     print(f"  seed   : {data.seed}")
-    if args.model == "zimage":
-        # Z-Image ignores the file's step count (tuned for SD 1.5); show the
-        # effective step count it actually uses.
-        from brainimg.generate import _model_config
+    from brainimg.generate import _model_config
 
-        eff_steps = args.steps or _model_config("zimage")["default_steps"]
-        print(f"  steps  : {eff_steps} (zimage default; file stored {data.steps})")
+    if args.model in ("zimage", "flux-depth", "flux-canny"):
+        # Z-Image + FLUX ignore the file's stored step count (tuned for SD 1.5);
+        # show the effective step count they actually use.
+        eff_steps = args.steps or _model_config(args.model)["default_steps"]
+        print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
     else:
         print(f"  steps  : {args.steps or data.steps}")
-    if device == "cpu" and not args.quantize and args.model != "zimage":
+    if (
+        device == "cpu"
+        and not args.quantize
+        and args.model not in ("zimage", "flux-depth", "flux-canny")
+    ):
         print("  note   : CPU fp32 is slow (minutes/image). Add --quantize for less memory.")
     if args.model == "zimage" and device != "cuda":
         print("  note   : Z-Image without CUDA is slow. Prefer --device cuda for 8-step speed.")
@@ -141,6 +159,24 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : Z-Image on CPU keeps the whole bf16 pipeline in RAM (~18 GB).")
     if args.model == "zimage":
         print("  note   : Z-Image path uses depth only; canny/seg maps are ignored.")
+    if args.model in ("flux-depth", "flux-canny"):
+        other = "canny" if args.model == "flux-depth" else "depth"
+        print(
+            f"  note   : FLUX is bf16; {args.model} uses only its "
+            f"{'depth' if args.model == 'flux-depth' else 'canny'} map "
+            f"({other}/seg maps ignored). Add --quantize on CPU to drop RAM "
+            f"from ~22 GB to ~12 GB via FP8 (transformer + T5)."
+        )
+    if args.model in ("flux-depth", "flux-canny") and device == "cpu" and not args.quantize:
+        print(
+            "  note   : FLUX on CPU without --quantize keeps the full bf16 pipeline "
+            "in RAM (~22 GB)."
+        )
+    if args.model in ("flux-depth", "flux-canny") and device == "mps":
+        print(
+            "  note   : FLUX on MPS streams layers host<->device; "
+            "8 GB Apple Silicon not supported (use --model sd15)."
+        )
 
     t0 = time.time()
     _, image = decode_brainimg(

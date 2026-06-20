@@ -19,6 +19,7 @@ resolution.
 | Segmentation (encoder) | PyTorch (OneFormer ADE20K) | `shi-labs/oneformer_ade20k_swin_tiny` |
 | Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` (+ `lllyasviel/control_v11p_sd15_seg` when the blueprint has a seg map) |
 | Image generation (decoder, `--model zimage`) | PyTorch + bf16 | `Tongyi-MAI/Z-Image-Turbo` (6B DiT) + `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` (8-step distill) |
+| Image generation (decoder, `--model flux-depth` / `--model flux-canny`) | PyTorch + bf16 (+ optional FP8) | `black-forest-labs/FLUX.1-Depth-dev` / `FLUX.1-Canny-dev` (12B MMDiT + T5-XXL; one conditioning image, channel-concat) |
 
 Captioning uses the MLX 4-bit model on Apple Silicon (fast, low memory) and
 falls back to the HuggingFace transformers Qwen2.5-VL-7B model on any other
@@ -29,6 +30,45 @@ The segmentation map is an **optional** field (added after the initial v0.1
 release), so older `.brainimg` files without it still decode exactly as before
 — the decoder just uses the two ControlNets (depth + Canny). Newer files carry
 an ADE20K colorized seg map and the decoder adds a third ControlNet for it.
+
+### `--model flux-depth` / `--model flux-canny`: FLUX backend
+
+Black Forest Labs' **FLUX.1 guidance-distilled** variants via diffusers'
+`FluxControlPipeline`. Same architectural pattern as Z-Image's Union net:
+**one conditioning image per call**, concatenated into the transformer
+channels (NOT a separate ControlNet model). The conditioning *type* is
+baked into which FLUX.1-*-dev checkpoint you load.
+
+- **`flux-depth`**: `FLUX.1-Depth-dev` + the blueprint's `depth_map_b64`.
+  Strongest structural grip; the natural counterpart to Z-Image's default.
+- **`flux-canny`**: `FLUX.1-Canny-dev` + `canny_map_b64`. Edge-faithful;
+  best for line-art / architectural subjects where edges dominate.
+
+The blueprint's other map (and any `segmentation_map_b64`) are silently
+ignored on this path — no schema change. bf16 throughout (FLUX is bf16-native
+and bf16 sidesteps the MPS fp16 NaN bug); `max_sequence_length=512`; ~30
+steps; per-model guidance scale (depth: 10.0, canny: 30.0).
+
+Memory cost is the headline tradeoff: T5-XXL (~9.5 GB bf16) + transformer
+(~12 GB bf16) + CLIP-L (~0.5 GB) + VAE (~0.2 GB) ≈ **22 GB resident**.
+`--quantize` FP8-quantizes the transformer + T5 via `optimum.quanto`
+(`qfloat8` weights-only — activation quant is brittle on FLUX), dropping
+resident to ~12 GB at a small quality cost. 8 GB Apple Silicon is **not
+supported** — use `--model sd15` there.
+
+```bash
+# CUDA: fast + full bf16 (needs ~22 GB VRAM)
+python decoder.py out.brainimg -o recon.png --model flux-depth --device cuda
+
+# CUDA + FP8: fits in ~12 GB VRAM, small quality cost
+python decoder.py out.brainimg -o recon.png --model flux-depth --device cuda --quantize
+
+# CPU-only with FP8: ~12 GB RAM resident, slow but works (recommended for CPU)
+python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu --quantize
+
+# CPU without --quantize: ~22 GB RAM resident (won't fit most dev boxes)
+python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu
+```
 
 ### `--model zimage`: Z-Image-Turbo backend
 
@@ -160,6 +200,10 @@ same image **exactly** (verified: 0 pixel difference between runs).
 | `--model zimage --device cuda` | bf16 | ~18 GB | **fast** (8 steps) | good (depth-only) |
 | `--model zimage --device mps` | bf16 + cpu-offload | varies | slow | good (depth-only) |
 | `--model zimage --device cpu` | bf16 (resident) | ~18 GB RAM | very slow | good (depth-only) |
+| `--model flux-depth --device cuda` | bf16 | ~22 GB | medium (30 steps) | good (depth-only) |
+| `--model flux-depth --device cuda --quantize` | bf16 + FP8 weights | ~12 GB | medium | good (depth-only) |
+| `--model flux-depth --device cpu --quantize` | bf16 + FP8 (RAM) | ~12 GB | very slow | good (depth-only) |
+| `--model flux-depth --device cpu` | bf16 (resident in RAM) | ~22 GB RAM | very slow | good (depth-only) |
 
 Use `--device cpu` on a high-RAM machine for the best reconstruction quality.
 
@@ -213,6 +257,15 @@ pytest                       # format tests, no models needed
   much closer to the source palette. Workaround: prefer `--model sdxl
   --size 1024x1024`, or use `--model sd15` when the source's color palette
   matters most. See TODO.md "SDXL hue distribution drift" for details.
+- **FLUX is heavy**: FLUX is T5-XXL + a 12B transformer (~22 GB bf16
+  resident). On CPU you almost always need `--quantize` (FP8 weights,
+  drops to ~12 GB). CUDA GPUs need ~22 GB VRAM (or ~12 GB with
+  `--quantize`). 8 GB Apple Silicon is **not supported** — fall back
+  to `--model sd15`. Like SDXL, FLUX is trained at 1024 and may show
+  the same hue-distribution drift at smaller sizes; prefer
+  `--size 1024x1024` for fidelity. FLUX.1-Depth-dev /
+  FLUX.1-Canny-dev carry the FLUX.1 non-commercial license.
+
 
 ## Verified results (M1, 8 GB)
 

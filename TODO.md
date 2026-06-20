@@ -57,6 +57,28 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       Verified on lenna.brainimg: 1024x1024 fp32, deterministic (identical md5
       across runs), color stats match targets. Scale tuning still TODO on a GPU.
 
+- [x] **FLUX.1 Control backend.** `--model flux-depth` /
+      `--model flux-canny` add Black Forest Labs' FLUX.1 guidance-distilled
+      Control variants. Same channel-concat conditioning pattern as Z-Image's
+      Union net (one image per call), wired through diffusers'
+      `FluxControlPipeline`:
+        * **`flux-depth`**: `FLUX.1-Depth-dev` + the blueprint's `depth_map_b64`.
+        * **`flux-canny`**: `FLUX.1-Canny-dev` + the blueprint's `canny_map_b64`.
+        * bf16 throughout (FLUX is bf16-native; sidesteps the MPS fp16 NaN
+          bug); no int8 quant. `--quantize` FP8-quantizes the transformer +
+          T5-XXL via `optimum.quanto` (`qfloat8` weights-only), dropping
+          resident memory from ~22 GB to ~12 GB.
+        * Per-device: cuda resident, mps cpu-offload, cpu resident in host
+          RAM (no offload trick on CPU-only boxes, same constraint as
+          Z-Image). 8 GB Apple Silicon is not supported -- use `sd15`.
+        * Defaults: 30 steps; cfg 10.0 (depth) / 30.0 (canny); max
+          sequence length 512 (T5-XXL); control scale 0.85.
+        * Non-commercial license (FLUX.1-dev family).
+      Schema-unchanged (the other map and the seg map are silently
+      ignored, like Z-Image). Same SDXL hue-distribution drift caveat
+      applies at small sizes -- prefer `--size 1024x1024` for palette
+      fidelity.
+
 ## Known issues (not pure decode-quality)
 
 - [ ] **Captioner accuracy on Lenna.** The 7B captioner misidentifies Lenna's

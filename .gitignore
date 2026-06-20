@@ -42,6 +42,11 @@ lenna_sdxl_comparison.jpg
 lenna_sdxl_fixed_prompt.png
 lenna_fixed_prompt.brainimg
 lenna_with_hue.brainimg
+# FLUX smoke-test artifacts
+lenna_flux_depth.png
+lenna_flux_canny.png
+lenna_flux_depth_comparison.jpg
+lenna_flux_canny_comparison.jpg
 
 # OS
 .DS_Store

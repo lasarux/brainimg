@@ -141,6 +141,48 @@ ZIMAGE_MAX_DEFAULT_SIDE = 1024
 # color_style prefix is prepended unconditionally on this path.
 ZIMAGE_MAX_TOKENS = 512
 
+# --- FLUX stack ----------------------------------------------------------- #
+# Black Forest Labs' FLUX.1 guidance-distilled variants, consumed via diffusers'
+# ``FluxControlPipeline``. Unlike SD 1.5/SDXL's separate ControlNet models,
+# FLUX's "control" variants bake the conditioning into the transformer via
+# channel-wise concatenation of the control image -- one conditioning image
+# per call, no seg mode. Same architectural pattern as Z-Image's Union net.
+#
+# Two variants are wired in:
+#   * ``flux-depth``: ``FLUX.1-Depth-dev`` + the blueprint's ``depth_map_b64``.
+#     Strongest structural grip; mirrors Z-Image's default.
+#   * ``flux-canny``: ``FLUX.1-Canny-dev`` + ``canny_map_b64``. Edge-faithful;
+#     best for line-art / architectural subjects where edges dominate.
+#
+# The non-control base ``FLUX.1-dev`` is *not* used (brainimg always
+# conditions on structure). ``FLUX.1-schnell`` is text-only + 4-step and has
+# no control variant.
+#
+# Memory: T5-XXL (~9.5 GB bf16) + transformer (~12 GB bf16) + CLIP-L (~0.5 GB)
+# + VAE (~0.2 GB) ~= 22 GB resident. ``--quantize`` FP8-quantizes the
+# transformer and T5 (the big two) via ``optimum.quanto`` to drop the resident
+# set to ~12 GB at a small quality cost. 8 GB Apple Silicon is not supported
+# (consistent with Z-Image).
+FLUX_DEPTH_MODEL_ID = "black-forest-labs/FLUX.1-Depth-dev"
+FLUX_CANNY_MODEL_ID = "black-forest-labs/FLUX.1-Canny-dev"
+# Guidance-distilled defaults per the model cards. The canny variant wants a
+# higher CFG than depth (FLUX dev notes / community recipes).
+FLUX_DEPTH_GUIDANCE_SCALE = 10.0
+FLUX_CANNY_GUIDANCE_SCALE = 30.0
+# ~30 steps is the "good quality / reasonable time" point on guidance-distilled
+# FLUX (the docs show 28-50; 30 is a fair default).
+FLUX_DEFAULT_STEPS = 30
+# Note: there is no per-call ``controlnet_conditioning_scale`` for FLUX.
+# The FLUX.1-Depth-dev / -Canny-dev checkpoints bake the conditioning
+# strength into the channel-concat weights -- diffusers' FluxControlPipeline
+# takes a ``control_image`` but no scale kwarg. ``--depth-scale`` /
+# ``--canny-scale`` are silently ignored on FLUX paths for that reason.
+# Trained at 1024. ``compute_target_size`` will cap to this on the long side.
+FLUX_MAX_DEFAULT_SIDE = 1024
+# T5's max sequence length. The T5-XXL encoder takes 256 normally and 512 for
+# the longer prompts; we let it use the full 512.
+FLUX_MAX_TOKENS = 512
+
 # Backwards-compat single-name constants (callers below use the helpers).
 SD_MODEL_ID = SD15_MODEL_ID
 VAE_MODEL_ID = SD15_VAE_ID
@@ -219,10 +261,19 @@ def _match_color_statistics(
 def _model_config(model: str) -> dict:
     """Return the per-model stack config (ids + defaults) for *model*.
 
-    ``model`` is "sd15", "sdxl", or "zimage". Centralized so callers don't
-    sprinkle conditionals; the SD 1.5 path keeps the historical defaults.
-    Z-Image differs structurally: a single Union ControlNet fed one depth
-    image (no canny, no seg) and a Qwen text encoder (512 tokens vs CLIP 77).
+    ``model`` is "sd15", "sdxl", "zimage", "flux-depth", or "flux-canny".
+    Centralized so callers don't sprinkle conditionals; the SD 1.5 path
+    keeps the historical defaults.
+
+    Structural notes:
+      * SD 1.5 / SDXL use separate ControlNet models (depth + canny + optional
+        seg). Three nets on the SD stack.
+      * Z-Image uses a single Union ControlNet fed one depth image (no canny,
+        no seg) and a Qwen text encoder (512 tokens vs CLIP 77).
+      * FLUX's ``flux-depth`` and ``flux-canny`` use diffusers'
+        ``FluxControlPipeline`` which concatenates the conditioning image
+        into the transformer channels (NOT a separate ControlNet model).
+        One conditioning image per call -- depth OR canny, not both.
     """
     if model == "zimage":
         return {
@@ -256,6 +307,32 @@ def _model_config(model: str) -> dict:
         # auto-looks for diffusion_pytorch_model.safetensors, so name it.
         "seg_weight_name": "sdxl_segmentation_ade20k_controlnet.safetensors",
     }
+    if model in ("flux-depth", "flux-canny"):
+        # Single-control stack: pick which conditioning map to feed and which
+        # base model (Depth vs Canny variant). The two FLUX.1-* Control
+        # checkpoints differ in what conditioning they were trained against,
+        # so the choice of base is the choice of conditioning type. There
+        # is no per-call control scale -- it's baked into the checkpoint
+        # (channel-concat conditioning); see FLUX_DEFAULT_STEPS comment.
+        if model == "flux-depth":
+            return {
+                "base_id": FLUX_DEPTH_MODEL_ID,
+                "kind": "flux",
+                "control_source": "depth",   # which b64 field on BrainimgData
+                "guidance": FLUX_DEPTH_GUIDANCE_SCALE,
+                "max_side": FLUX_MAX_DEFAULT_SIDE,
+                "default_steps": FLUX_DEFAULT_STEPS,
+                "max_tokens": FLUX_MAX_TOKENS,
+            }
+        return {
+            "base_id": FLUX_CANNY_MODEL_ID,
+            "kind": "flux",
+            "control_source": "canny",
+            "guidance": FLUX_CANNY_GUIDANCE_SCALE,
+            "max_side": FLUX_MAX_DEFAULT_SIDE,
+            "default_steps": FLUX_DEFAULT_STEPS,
+            "max_tokens": FLUX_MAX_TOKENS,
+        }
     return {
         "base_id": SD15_MODEL_ID,
         "vae_id": SD15_VAE_ID,
@@ -503,6 +580,84 @@ def _build_zimage_pipeline(device: str):
     return pipe, torch
 
 
+def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
+    """Construct the FLUX Control pipeline (flux-depth or flux-canny).
+
+    Distinct from the SD 1.5/SDXL and Z-Image paths:
+
+      * bf16 throughout. FLUX is bf16-native (T5-XXL + a 12B MMDiT
+        transformer); bf16 also sidesteps the MPS fp16 NaN bug, same as
+        Z-Image. No fp16 anywhere, no int8 weight quant -- ``--quantize``
+        instead uses ``optimum.quanto``'s ``qfloat8`` on the two big
+        modules to halve memory at a small quality cost.
+
+      * Channel-concat conditioning (NOT a ControlNet model). Diffusers'
+        ``FluxControlPipeline`` takes a single ``control_image``; the
+        conditioning *type* is baked into which FLUX.1-*-dev checkpoint
+        you load (``FLUX.1-Depth-dev`` or ``FLUX.1-Canny-dev``). We pick
+        the right base for ``variant`` ("flux-depth" or "flux-canny")
+        and feed the matching map from the blueprint. The other map
+        (and the seg map, if present) are silently ignored -- no schema
+        change.
+
+      * Per-device memory strategy (mirrors Z-Image):
+          - cuda: ``pipe.to("cuda")``. ~22 GB VRAM (T5-XXL ~9.5 GB +
+            transformer ~12 GB + CLIP-L ~0.5 GB + VAE ~0.2 GB).
+          - mps:  ``enable_model_cpu_offload()`` streams layers
+            host<->MPS. Slow but avoids OOM. 8 GB Apple Silicon is NOT
+            supported -- use ``--model sd15`` there.
+          - cpu:  ``pipe.to("cpu")`` keeps the full bf16 pipeline
+            resident in host RAM (~22 GB). Same constraint as Z-Image:
+            ``enable_model_cpu_offload`` raises ``RuntimeError`` on a
+            CPU-only box.
+
+      * ``--quantize`` (FLUX-only on this path): FP8-quantize the
+        transformer and T5-XXL via ``optimum.quanto``. Drops resident
+        set from ~22 GB to ~12 GB. Activations stay bf16 (FLUX
+        quantization recipes in the diffusers docs use weights-only
+        ``qfloat8`` -- we follow that). ``freeze()`` after each quantize
+        so the calibration graph doesn't get re-run on each forward.
+
+    Returns ``(pipe, torch)`` to match the SD/Z-Image builder signature.
+    """
+    import torch
+    from diffusers import FluxControlPipeline
+
+    cfg = _model_config(variant)
+    load_dtype = torch.bfloat16
+
+    pipe = FluxControlPipeline.from_pretrained(
+        cfg["base_id"],
+        torch_dtype=load_dtype,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        # CPU-only: keep the full bf16 pipeline resident. No offload trick
+        # on a box without an accelerator.
+        pipe = pipe.to("cpu")
+
+    if quantize:
+        # FLUX is fp8-brittle on activation quant (per the diffusers blog
+        # post on Quanto + Flux), so we quantize weights only. T5-XXL is
+        # the dominant text encoder (FLUX uses T5-XXL + a small CLIP-L);
+        # both are fp8-safe on weights.
+        from optimum.quanto import freeze, qfloat8, quantize
+
+        quantize(pipe.transformer, weights=qfloat8)
+        freeze(pipe.transformer)
+        # ``pipe.text_encoder_2`` is T5-XXL on FLUX; ``pipe.text_encoder``
+        # is CLIP-L (~0.5 GB, not worth quantizing).
+        if getattr(pipe, "text_encoder_2", None) is not None:
+            quantize(pipe.text_encoder_2, weights=qfloat8)
+            freeze(pipe.text_encoder_2)
+
+    return pipe, torch
+
+
 def _build_prompt(data: BrainimgData, tokenizer, max_tokens: int = CLIP_MAX_TOKENS) -> str:
     """Prepend the stored color style prefix to the caption if it fits.
 
@@ -545,16 +700,20 @@ def generate_image(
 
     Args:
         device_override: "cpu", "mps", "cuda", or None (auto-detect).
-        quantize: int8-quantize weights on CPU to save memory (small quality
-            cost). SD 1.5/SDXL only; ignored for Z-Image (bf16, no quant).
-        guidance_scale: override the classifier-free guidance scale. Defaults
-            are per-model (SD 1.5: 7.5, SDXL: 7.0, Z-Image: 0.0).
+        quantize: int8-quantize weights on SD 1.5/SDXL; FP8-quantize
+            transformer + T5 on FLUX. Z-Image ignores it (bf16, no tested
+            quant path).
+        guidance_scale: override the classifier-free guidance scale.
+            Defaults are per-model (SD 1.5: 7.5, SDXL: 7.0, Z-Image: 0.0,
+            flux-depth: 10.0, flux-canny: 30.0).
         depth_scale / canny_scale / seg_scale: override the ControlNet
             conditioning scales. Defaults are per-model. For Z-Image only
             depth_scale applies (canny/seg are ignored on that path).
-        model: "sd15" (default), "sdxl", or "zimage". SDXL needs ~7 GB base +
-            3 ControlNets at 1024. Z-Image is a 6B bf16 DiT needing ~16 GB VRAM
-            and uses a single depth conditioning image (canny/seg ignored).
+            For FLUX only one scale applies (depth or canny, matching the
+            chosen variant).
+        model: "sd15" (default), "sdxl", "zimage", "flux-depth", or
+            "flux-canny". SDXL/FLUX both trained at 1024. FLUX is bf16 and
+            takes a single depth OR canny conditioning image (not both).
     """
     if model == "zimage":
         return _generate_zimage(
@@ -564,6 +723,18 @@ def generate_image(
             device_override=device_override,
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
+        )
+    if model in ("flux-depth", "flux-canny"):
+        return _generate_flux(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            quantize=quantize,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+            canny_scale=canny_scale,
+            variant=model,
         )
     return _generate_sd(
         data,
@@ -692,6 +863,83 @@ def _generate_zimage(
     image: Image.Image = result.images[0]
 
     # Harmless on Z-Image (no-op when targets == 0.0); corrects any color drift.
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_flux(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    quantize: bool,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+    canny_scale: float | None,
+    variant: str,
+) -> Image.Image:
+    """FLUX Control path (flux-depth or flux-canny).
+
+    Feeds the blueprint's depth_map_b64 OR canny_map_b64 to
+    ``FluxControlPipeline`` as a single ``control_image``. The blueprint's
+    other map and any segmentation_map_b64 are silently ignored -- the
+    pipeline takes one image per call, same as Z-Image's Union net.
+
+    Note: ``depth_scale`` / ``canny_scale`` are accepted for signature
+    parity with the SD 1.5/SDXL paths but have no effect on FLUX -- the
+    conditioning strength is baked into the channel-concat weights, with
+    no per-call scale kwarg on diffusers' ``FluxControlPipeline.__call__``.
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config(variant)
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Pick which conditioning image to feed based on the variant.
+    if cfg["control_source"] == "depth":
+        control_b64 = data.depth_map_b64
+    elif cfg["control_source"] == "canny":
+        control_b64 = data.canny_map_b64
+    else:  # pragma: no cover -- defensive, _model_config only emits depth/canny
+        raise ValueError(f"unknown FLUX control source: {cfg['control_source']!r}")
+    control_image = b64_to_image(control_b64).convert("RGB").resize(
+        (target_w, target_h), Image.LANCZOS
+    )
+
+    # FLUX's channel-concat control has no per-call scale (the conditioning
+    # strength is baked into the trained checkpoint), so ``depth_scale`` /
+    # ``canny_scale`` are silently ignored here. The scale constants in
+    # FLUX_DEFAULT_STEPS's docstring are documentation-only.
+
+    pipe, torch = _build_flux_pipeline(device, variant, quantize=quantize)
+
+    # FLUX's tokenizer is CLIPTokenizer (text_encoder=CLIP-L) for ``tokenizer``
+    # and T5TokenizerFast (text_encoder_2=T5-XXL) for ``tokenizer_2``. The
+    # T5 path can take 512 tokens; combined prompt always fits.
+    prompt = _build_prompt(data, pipe.tokenizer_2, max_tokens=cfg["max_tokens"])
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        prompt=prompt,
+        control_image=control_image,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        max_sequence_length=cfg["max_tokens"],
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation
     )

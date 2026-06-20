@@ -34,6 +34,8 @@ def main() -> int:
         ("SDXL  512 (new)",      "lenna_sdxl_512.png"),
         ("SDXL  512 fixed-prompt", "lenna_sdxl_fixed_prompt.png"),
         ("SDXL  512 with-hue",   "lenna_sdxl_512_with_hue.png"),
+        ("FLUX depth 512",       "lenna_flux_depth.png"),
+        ("FLUX canny 512",       "lenna_flux_canny.png"),
     ]
     print(f"{'recon':28s}  {'size':>11s}  {'MSE':>10s}  {'PSNR':>8s}  {'MAE':>7s}")
     print("-" * 72)

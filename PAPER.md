@@ -3,7 +3,7 @@ title: "brainimg: A Reproducible Systems Study of Generative-Recall Image Compre
 authors:
   - name: Pedro A. Gracia Fajardo
     email: lasarux@gmail.com
-date: 2026-06-19
+date: 2026-06-20
 abstract: |
   Classical image formats store pixels—either directly, as transform coefficients,
   or as latent codes—and are therefore resolution-bound and tied to the exact
@@ -11,21 +11,27 @@ abstract: |
   image format that stores the *meaning* of an image (a text caption) plus a
   tiny *structural blueprint* (128×128 depth, Canny-edge, and ADE20K
   segmentation maps) and a seed, and regenerates a visually faithful image on
-  decode using Stable Diffusion 1.5 with two to three ControlNets. We frame
-  brainimg as a working, reproducible instantiation of the "Semantic-Relational
-  Field / generative-recall" paradigm: rather than compressing appearance, it
-  stores the scene's semantics and geometry and lets a diffusion model repaint
-  it. We describe the format schema, the four-stage encoder (VLM captioning,
-  depth estimation, edge extraction, semantic segmentation), and the decoder
-  (ControlNet-conditioned diffusion with VAE substitution, int8 quantization to
-  avoid an Apple-Silicon fp16 NaN bug, and brightness/saturation
-  post-processing). Using only measurements reproducible from the committed
-  repository, we report blueprint sizes of 2.7–7.9 KB (compression ratios of
-  2.2×–99.7× against the source files, depending on original size and encoding),
-  deterministic reconstruction given a fixed seed, and a device/precision
-  tradeoff across CPU fp32, MPS int8, and CUDA fp16. We are explicit that
-  brainimg is lossy-by-design, decoder-dependent, and unsuited to
-  forensic/medical use; we position it as a systems study of a novel paradigm
+  decode using one of four pluggable diffusion decoders: Stable Diffusion 1.5
+  (default) or SDXL with two-to-three ControlNets, Z-Image-Turbo with a single
+  Union ControlNet, or FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat
+  conditioning. We frame brainimg as a working, reproducible instantiation of
+  the "Semantic-Relational Field / generative-recall" paradigm: rather than
+  compressing appearance, it stores the scene's semantics and geometry and lets
+  a diffusion model repaint it. We describe the format schema, the four-stage
+  encoder (VLM captioning, depth estimation, edge extraction, semantic
+  segmentation), the four decoder backends, the per-device memory/precision
+  strategies (int8 quantization to dodge an Apple-Silicon fp16 NaN bug,
+  FP8-quantized FLUX transformers, BF16 + cpu-offload for Z-Image and FLUX on
+  smaller devices), and the brightness/saturation post-processing. Using only
+  measurements reproducible from the committed repository, we report blueprint
+  sizes of 2.7–7.9 KB (compression ratios of 2.2×–99.7× against the source
+  files, depending on original size and encoding), deterministic reconstruction
+  given a fixed seed, a per-backend fidelity comparison on the Lenna test image
+  in which FLUX.1-Depth-dev at 512×512 outperforms SDXL at 1024×1024 on
+  per-channel MSE / PSNR / MAE, and a device/precision tradeoff across CPU
+  fp32, MPS int8, CUDA fp16, and CPU-resident BF16 with FP8 quantization. We
+  are explicit that brainimg is lossy-by-design, decoder-dependent, and unsuited
+  to forensic/medical use; we position it as a systems study of a novel paradigm
   rather than a replacement for JPEG.
 ---
 
@@ -146,12 +152,12 @@ so their heavy models are never resident simultaneously—an important
 constraint on the 8 GB Apple Silicon target.
 
 ```
- Source image ──► ENCODER ──► .brainimg (JSON, ~3–10 KB) ──► DECODER ──► image
-   (jpg/png)        │                                    (SD+ControlNet)   (any size)
-                    ├─ 1. Caption (Qwen-VLM)        ─► prompt
-                    ├─ 2. Depth   (Depth-Anything-V2) ─► 128² JPEG
-                    ├─ 3. Canny   (OpenCV)            ─► 128² PNG
-                    └─ 4. Seg     (OneFormer ADE20K)  ─► 128² PNG (optional)
+ Source image --> ENCODER --> .brainimg (JSON, ~3-10 KB) --> DECODER --> image
+    (jpg/png)        |                                    (SD+ControlNet)   (any size)
+                     +- 1. Caption (Qwen-VLM)        --> prompt
+                     +- 2. Depth   (Depth-Anything-V2) --> 128^2 JPEG
+                     +- 3. Canny   (OpenCV)            --> 128^2 PNG
+                     +- 4. Seg     (OneFormer ADE20K)  --> 128^2 PNG (optional)
 ```
 
 ## 3.1 The `.brainimg` file format
@@ -237,8 +243,25 @@ caption itself is never truncated.
 ## 3.3 Decoder
 
 The decoder (`brainimg/generate.py`) regenerates an image from the blueprint
-with Stable Diffusion 1.5 (default) or SDXL (opt-in via `--model sdxl`) and
-two-to-three ControlNets.
+using one of four pluggable backends, all sharing the same blueprint schema
+and the same brightness/saturation post-processing:
+
+| `--model` | Base | Conditioning | Steps (default) | License |
+|---|---|---|---|---|
+| `sd15` (default) | `stable-diffusion-v1-5` | depth + canny (+ seg) ControlNets | 30 | CreativeML Open RAIL-M |
+| `sdxl` | `stable-diffusion-xl-base-1.0` | depth + canny (+ seg) ControlNets | 30 | CreativeML Open RAIL-M |
+| `zimage` | `Tongyi-MAI/Z-Image-Turbo` | single Union ControlNet (depth) | 9 (8-step Turbo) | Tongyi-MAI non-commercial |
+| `flux-depth` | `black-forest-labs/FLUX.1-Depth-dev` | channel-concat `depth_map_b64` | 30 | FLUX.1-dev non-commercial |
+| `flux-canny` | `black-forest-labs/FLUX.1-Canny-dev` | channel-concat `canny_map_b64` | 30 | FLUX.1-dev non-commercial |
+
+All five backends consume the **same blueprint**; the schema is unchanged
+when a new decoder is added. We describe the SD 1.5 / SDXL path in detail
+(the historical default), then summarise the Z-Image-Turbo and FLUX paths
+that diverge structurally.
+
+### 3.3.1 SD 1.5 / SDXL (ControlNet stack)
+
+The default backend. SD 1.5 ships at 512², SDXL at 1024².
 
 **Conditioning.** The depth and Canny maps are decoded from base64 and
 upscaled to the target size (Lanczos for depth, nearest-neighbour for Canny
@@ -282,7 +305,44 @@ needs ratio 0.38, clamped to 0.5).
 **Style-prefix gating.** The stored colour-style prefix is prepended to the
 caption only when the combined length fits within the CLIP 77-token limit,
 biasing mood without ever truncating the caption. Older files with no stored
-style use the caption verbatim.
+style use the caption verbatim. (For Z-Image-Turbo and FLUX, which use a
+Qwen / T5 text encoder with a 512-token limit, the style prefix is
+prepended unconditionally.)
+
+### 3.3.2 Z-Image-Turbo (Union ControlNet)
+
+`--model zimage` swaps the SD stack for **Tongyi-MAI/Z-Image-Turbo** (a
+6 B-parameter single-stream DiT distilled for ~8 steps) plus the
+`alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` *Union* ControlNet
+(the full `2.1-8steps` variant, ~6.4 GB). The Union net is a single
+network that takes one conditioning image per call and bakes the
+conditioning *type* (depth/canny/pose/mlsd/hed) into its training; we feed
+the blueprint's `depth_map_b64` because depth carries the most structural
+information. The blueprint's `canny_map_b64` and `segmentation_map_b64` are
+**silently ignored** on this path—no schema change. Z-Image runs in **bf16
+throughout**, which sidesteps the MPS fp16 NaN bug entirely (a different
+dtype, no int8 quantization is used). Defaults: `guidance_scale = 0.0`
+(Turbo is distilled for zero CFG), 9 inference steps (8 DiT forward
+passes on the Turbo schedule), 1024 max side.
+
+### 3.3.3 FLUX.1-Depth-dev / FLUX.1-Canny-dev (channel-concat)
+
+`--model flux-depth` and `--model flux-canny` load Black Forest Labs'
+**FLUX.1** guidance-distilled Control variants. FLUX.1 is a 12 B-parameter
+MMDiT transformer with a T5-XXL text encoder (CLIP-L is the small auxiliary
+encoder). The FLUX.1-*-dev Control checkpoints bake the conditioning into
+the transformer via **channel-wise concatenation** of the conditioning
+image—not a separate ControlNet model. Diffusers' `FluxControlPipeline`
+takes a single `control_image` per call; we feed `depth_map_b64` for
+`flux-depth` and `canny_map_b64` for `flux-canny`. The other map and any
+`segmentation_map_b64` are silently ignored. bf16 throughout (FLUX's
+native dtype, sidesteps the MPS fp16 NaN bug). Defaults: cfg 10.0 (depth)
+or 30.0 (canny), 30 inference steps, 1024 max side, `max_sequence_length =
+512` (T5-XXL). No per-call `controlnet_conditioning_scale`—the
+conditioning strength is fixed by the trained checkpoint, so the
+`--depth-scale` / `--canny-scale` CLI flags are accepted for argument
+parity but silently ignored on FLUX paths. **License**: FLUX.1-Depth-dev /
+-Canny-dev carry the FLUX.1-dev non-commercial license.
 
 ## 3.4 Device and precision strategy
 
@@ -295,12 +355,21 @@ full fp32 is supported (best fidelity, slow, ~10 GB RAM) and an optional int8
 weights mode fits in ~5 GB at a small quality cost. On CUDA, fp16 works
 correctly and is fast.
 
-| `--device` | Precision | RAM | Speed | Fidelity |
+| `--device` / `--model` | Precision | RAM | Speed | Fidelity |
 |---|---|---|---|---|
-| `cpu` | fp32 (no quant) | ~10 GB | slow (min/image) | **best** |
-| `cpu --quantize` | int8 weights, fp32 activations | ~5 GB | slow | good |
-| `mps` (Apple Silicon) | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
-| `cuda` | fp16 | ~5 GB | **fast** | good |
+| `cpu` (sd15) | fp32 (no quant) | ~10 GB | slow (min/image) | **best** (sd15) |
+| `cpu --quantize` (sd15) | int8 weights, fp32 activations | ~5 GB | slow | good |
+| `mps` (sd15, Apple Silicon) | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
+| `cuda` (sd15) | fp16 | ~5 GB | **fast** | good |
+| `--model sdxl --device cpu` | fp32 (no quant) | ~10 GB | very slow (1024²) | **best** (sdxl) |
+| `--model sdxl --device cuda` | fp16 | ~10 GB | medium | good |
+| `--model zimage --device cuda` | bf16 resident | ~18 GB | **fast** (8 steps) | good (depth-only) |
+| `--model zimage --device mps` | bf16 + cpu-offload | varies | slow | good (depth-only) |
+| `--model zimage --device cpu` | bf16 resident in host RAM | ~18 GB RAM | very slow | good (depth-only) |
+| `--model flux-depth --device cuda` | bf16 resident | ~22 GB | medium (30 steps) | **best** (FLUX) |
+| `--model flux-depth --device cuda --quantize` | bf16 + FP8 weights | ~12 GB | medium | good |
+| `--model flux-depth --device cpu --quantize` | bf16 + FP8 (host RAM) | ~12 GB RAM | very slow | good |
+| `--model flux-depth --device cpu` | bf16 resident in host RAM | ~22 GB RAM | very slow | good |
 
 The encoder/decoder device selection is centralised in `brainimg/device.py`,
 which also provides `free_torch()` / `free_mlx()` memory-release helpers.
@@ -360,10 +429,19 @@ assets, which we reference here as figures:
   Per `README.md`, the captioner correctly described the scene ("a black puppy
   sitting on a wooden surface") and the decoder produced a visually faithful
   reconstruction at 256×256 in 59 s on the M1/8 GB machine.
-- `lenna_comparison.jpg`, `test512_comparison.jpg` — 512² reconstructions.
+- `lenna_comparison.jpg`, `test512_comparison.jpg` — 512² SD 1.5 reconstructions.
 - `lenna_sdxl_comparison.jpg`, `lenna_sdxl.png` — an SDXL run on
   `lenna.brainimg` at 1024×1024 fp32, verified deterministic (identical md5
   across runs, colour stats matched targets) per `TODO.md` Tier 3.
+- `lenna_zimage_comparison.jpg`, `lenna_zimage.png` — a Z-Image-Turbo run on
+  `lenna.brainimg` at 512×512 bf16 (8-step Turbo schedule; depth-only
+  conditioning; canny + seg maps ignored per §3.3.2).
+- `lenna_sdxl_512_comparison.jpg`, `lenna_sdxl_512.png` — SDXL at the same
+  512×512 resolution as the SD 1.5 default, allowing a like-for-like
+  comparison (§4.7 below).
+- `lenna_flux_depth_comparison.jpg`, `lenna_flux_depth.png` — FLUX.1-Depth-dev
+  at 512×512 with FP8-quantized transformer + T5-XXL (`--quantize`). The
+  first FLUX reconstruction committed to the repository.
 
 ## 4.4 Determinism
 
@@ -375,16 +453,20 @@ so a `.brainimg` file plus a fixed decoder yields a bit-identical image.
 
 ## 4.5 Device and precision ablation
 
-Table 1 (§3.4) summarises the four operating modes. The key engineering
-finding is that on Apple Silicon the naive fp16 path is unusable (NaNs),
-forcing int8 weights + activations; this halves memory but degrades
-structural fidelity relative to CPU fp32. CPU fp32 is the recommended mode on
-a high-RAM machine for best quality; CUDA fp16 is the recommended mode for
-speed.
+Table 1 (§3.4) summarises the supported operating modes. The key
+engineering finding is that on Apple Silicon the SD 1.5 naive fp16 path is
+unusable (NaNs), forcing int8 weights + activations; this halves memory
+but degrades structural fidelity relative to CPU fp32. CPU fp32 is the
+recommended SD 1.5 mode on a high-RAM machine for best quality; CUDA fp16
+is the recommended mode for speed. Z-Image-Turbo and FLUX are bf16
+throughout (their native dtype), which sidesteps the MPS fp16 NaN bug
+entirely; FLUX additionally supports FP8 quantization of the transformer
++ T5 via `optimum.quanto` to halve resident memory at a small quality
+cost.
 
 ## 4.6 Known failure modes
 
-Two failure modes are documented in `TODO.md`:
+Three failure modes are documented in `TODO.md`:
 
 - **Captioner misidentification.** The 7B captioner misidentifies Lenna's dark
   curled hair as *"a wide-brimmed straw hat adorned with purple feathers."*
@@ -396,6 +478,73 @@ Two failure modes are documented in `TODO.md`:
   `_match_color_statistics` cannot reach extreme targets (e.g. darkening
   210→80 needs ratio 0.38, clamped to 0.5). A per-channel gamma or wider clamp
   is noted as a possible fix, weighed against clipping artefacts.
+- **SDXL hue distribution drift at small sizes** (added 2026-06-20). When
+  SDXL is decoded at 512×512 on a source whose dominant palette is in a
+  narrow band (e.g. Lenna's pink/magenta), the output lands in a different
+  hue *distribution*: per-pixel hue histograms of the saturated pixels
+  show SDXL@512 concentrating at 60°–90° (orange/yellow) instead of the
+  source's 330°–30° (pink/magenta). This is a content/palette drift, not a
+  stat drift: a single global HSV-H rotation aligns means but cannot
+  reshape distributions, and a rotation large enough to chase a different
+  distribution recolours neutrals and skin in a way that reads worse than
+  the original drift. Workaround: prefer SDXL at 1024×1024, where the
+  drift is much smaller (SDXL@1024 concentrates in the right band).
+  FLUX.1-Depth-dev at 512×512 produces a less-drifted palette than SDXL@512
+  on the same blueprint (§4.7).
+
+## 4.7 Per-backend fidelity comparison (Lenna, MSE/PSNR/MAE)
+
+Beyond the qualitative side-by-side comparisons in §4.3, we report three
+pixel-level metrics on the Lenna blueprint for each decoder backend,
+reproduced from a single source (`samples/lenna.tiff`, 512×512 RGB). The
+metrics are computed by `scripts/compare_lenna.py` after resizing each
+reconstruction to 512×512 (so the comparison is like-for-like across
+backends, even when the decoder produced a different native size).
+Numbers in this table are reproducible from the committed artifacts:
+
+| Backend | Output size | MSE ↓ | PSNR (dB) ↑ | MAE ↓ |
+|---|---|---:|---:|---:|
+| SD 1.5 (`lenna_recon.png`) | 512×512 | 8763 | 8.70 | 77.5 |
+| SDXL (`lenna_sdxl.png`) | 1024×1024 → 512×512 | 3944 | 12.17 | 51.9 |
+| SDXL (`lenna_sdxl_512.png`) | 512×512 | 5774 | 10.52 | 58.8 |
+| **FLUX.1-Depth-dev (`lenna_flux_depth.png`) — FP8** | 512×512 | **3256** | **13.00** | **44.1** |
+
+Three observations. First, **FLUX.1-Depth-dev at 512×512 beats SDXL at
+1024×1024** on every metric, despite SDXL having four times the pixels.
+Second, FLUX.1-Depth-dev at 512×512 also beats SDXL at the *same* 512×512
+resolution by 44 % in MSE, consistent with the qualitative impression of
+FLUX as the more photorealistic decoder. Third, the SDXL@512 → SDXL@1024
+gap is large: a 4× increase in pixel count buys a 32 % MSE reduction,
+suggesting SDXL's quality is meaningfully tied to its native training
+resolution. **These numbers do not generalise beyond Lenna** (a single
+source with a narrow pink palette); §5.3 notes that a real evaluation
+requires more subjects and perceptual metrics (LPIPS, CLIP-score, FID).
+
+## 5. Discussion
+
+- **Captioner misidentification.** The 7B captioner misidentifies Lenna's dark
+  curled hair as *"a wide-brimmed straw hat adorned with purple feathers."*
+  Because the conditioning maps (depth/Canny/seg) capture the true structure
+  regardless, a wrong caption biases mood more than geometry—but it does bias
+  generation. Mitigations noted for future work: a larger VLM or caption
+  ensembling.
+- **Brightness-clamp edge case.** The $[0.5, 2.0]$ gain clamp in
+  `_match_color_statistics` cannot reach extreme targets (e.g. darkening
+  210→80 needs ratio 0.38, clamped to 0.5). A per-channel gamma or wider clamp
+  is noted as a possible fix, weighed against clipping artefacts.
+- **SDXL hue distribution drift at small sizes** (added 2026-06-20). When
+  SDXL is decoded at 512×512 on a source whose dominant palette is in a
+  narrow band (e.g. Lenna's pink/magenta), the output lands in a different
+  hue *distribution*: per-pixel hue histograms of the saturated pixels
+  show SDXL@512 concentrating at 60°–90° (orange/yellow) instead of the
+  source's 330°–30° (pink/magenta). This is a content/palette drift, not a
+  stat drift: a single global HSV-H rotation aligns means but cannot
+  reshape distributions, and a rotation large enough to chase a different
+  distribution recolours neutrals and skin in a way that reads worse than
+  the original drift. Workaround: prefer SDXL at 1024×1024, where the
+  drift is much smaller (SDXL@1024 concentrates in the right band).
+  FLUX.1-Depth-dev at 512×512 produces a less-drifted palette than SDXL@512
+  on the same blueprint (§4.7).
 
 # 5. Discussion
 
@@ -426,23 +575,37 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
 ### 5.2 Limitations
 
 - **Decoder dependency.** Unlike JPEG's kilobyte decoder, brainimg's decoder
-  is a multi-gigabyte neural network. A device without the standard decoder
-  cannot view the image—the codec is more like a video codec in this respect.
-  On the other hand, the decoder is *shared* across all files, so the per-file
-  cost remains a few KB.
+  is a multi-gigabyte neural network (anywhere from ~4 GB for SD 1.5 to
+  ~22 GB for FLUX.1 bf16, reducible to ~12 GB with FP8 quantization). A
+  device without the standard decoder cannot view the image—the codec is
+  more like a video codec in this respect. On the other hand, the decoder
+  is *shared* across all files, so the per-file cost remains a few KB.
 - **Compute cost.** Decompression runs a diffusion model: minutes per image
   on CPU, ~59 s for a 256² image on M1/8 GB, faster on CUDA. This precludes
   gallery scrolling or video use cases on current hardware.
-- **Quality depends on device.** CPU fp32 gives the best reconstruction; on
-  8 GB Apple Silicon, int8 quantization (required by the MPS fp16 NaN bug)
-  degrades structural fidelity, and 512×512 OOMs on MPS (256 is the safe
-  ceiling there).
+- **Quality depends on device.** CPU fp32 gives the best SD 1.5
+  reconstruction; on 8 GB Apple Silicon, int8 quantization (required by
+  the MPS fp16 NaN bug) degrades structural fidelity, and 512×512 OOMs on
+  MPS (256 is the safe ceiling there). Z-Image-Turbo and FLUX are
+  bf16-native and are not supported on 8 GB Apple Silicon; FLUX CPU
+  requires ~22 GB host RAM (or ~12 GB with `--quantize`).
 - **Lossy by design.** Reconstruction is semantically faithful, not
   pixel-identical. The format is explicitly unsuited to medical, legal, or
   forensic images.
 - **Captioner accuracy.** Wrong captions bias generation (§4.6). Structure
   is the primary fidelity driver, which limits but does not eliminate the
   impact of caption errors.
+- **Per-backend palette fidelity.** SDXL and Z-Image, run at sizes smaller
+  than their native training resolution (1024), can drift into a different
+  hue *distribution* than the source (§4.6). This is a content/palette
+  drift the existing brightness/saturation post-processor cannot correct.
+  Prefer each backend's native resolution (512 for SD 1.5, 1024 for SDXL /
+  Z-Image / FLUX) when colour fidelity matters.
+- **License footprint.** The default backend (SD 1.5 + ControlNets) is
+  CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is non-commercial.
+  FLUX.1-Depth-dev / FLUX.1-Canny-dev are FLUX.1-dev non-commercial. If
+  distribution matters, only the SD 1.5/SDXL paths are permissively
+  licensed.
 
 ### 5.3 Planned evaluation (not run here)
 
@@ -460,19 +623,23 @@ the `samples/` directory.
 brainimg is a small, reproducible prototype of a different way to compress
 images: store the *meaning and structure* of a scene and let a diffusion model
 repaint it. We have described the format schema, the four-stage encoder, the
-ControlNet-conditioned decoder with its quality post-processing, and the
+five decoder backends (SD 1.5, SDXL, Z-Image-Turbo, FLUX.1-Depth-dev,
+FLUX.1-Canny-dev) with their quality post-processing, and the
 device/precision tradeoffs forced by an 8 GB Apple Silicon target. Using only
 measurements reproducible from the committed repository, we observe
 few-kilobyte blueprints (2.2×–99.7× compression depending on source size),
-deterministic reconstruction given a seed, and qualitatively different
-failure modes from transform codecs. We frame this as a systems study of a
-paradigm, not a JPEG replacement, and we are explicit about its
-limitations—decoder dependency, compute cost, and lossy-by-design semantics.
+deterministic reconstruction given a seed, and a clear fidelity ordering
+on the Lenna test image in which FLUX.1-Depth-dev at 512×512 (FP8-quantized)
+beats SDXL at 1024×1024 on per-channel MSE / PSNR / MAE. We frame this as a
+systems study of a paradigm, not a JPEG replacement, and we are explicit
+about its limitations—decoder dependency, compute cost, per-backend palette
+fidelity, and lossy-by-design semantics.
 
 Planned work tracked in `TODO.md` includes raising `MAP_SIZE` from 128 to 256
-for sharper conditioning, tuning ControlNet scales and CFG for the current
-model stack, addressing the brightness-clamp edge case, and completing the
-SDXL tuning on a GPU.
+for sharper conditioning, per-region hue transfer (a fix for the SDXL
+hue-distribution drift documented in §4.6), tuning ControlNet scales and
+CFG for the current model stack, addressing the brightness-clamp edge
+case, and completing the FLUX / Z-Image tuning on a GPU.
 
 # 7. Reproducibility
 
@@ -540,6 +707,15 @@ Markdown draft; a submission version would expand them into a `.bib`.
 - `lllyasviel/control_v11f1p_sd15_depth`,
   `lllyasviel/control_v11p_sd15_canny`,
   `lllyasviel/control_v11p_sd15_seg` (SD 1.5 ControlNets).
+- `Tongyi-MAI/Z-Image-Turbo` (6 B-parameter DiT distilled for 8-step
+  inference) with `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1`
+  (the full `2.1-8steps` variant; the `*lite*` 2601/2602 files are rejected
+  by diffusers 0.38 due to a widened `control_all_x_embedder` input dim).
+- `black-forest-labs/FLUX.1-Depth-dev` and `black-forest-labs/FLUX.1-Canny-dev`
+  (FLUX.1 guidance-distilled Control variants; channel-concat
+  conditioning). `black-forest-labs/FLUX.1-dev` (the underlying 12 B
+  MMDiT + T5-XXL base) — gated on Hugging Face; both FLUX Control
+  variants carry the FLUX.1-dev non-commercial license.
 - Wallace, G. K. (1992). *The JPEG Still Picture Compression Standard.*
   Communications of the ACM.
 - WebP / VP8 intra-frame specification (Google).

@@ -134,9 +134,10 @@ for the full project description and `TODO.md` for planned decode-quality work.
   produces hard binary edges). This type mismatch creates a PSNR-vs-color
   trade-off: scale=0.5 gives the best PSNR (10.20 dB) but collapses the
   blue/purple band (20% vs source 53%); scale=1.0 preserves color (54% blue)
-  but gives the worst PSNR (8.69 dB). The default 0.8 is a compromise (8.84
-  dB, 43% blue). SANA is the fastest 1024-native backend (52 s at 1024²,
-  20 steps, ~5 GB RAM) but the lowest-PSNR backend due to the mismatch.
+  but gives the worst PSNR (8.69 dB). The default 0.4 is the visually best
+  compromise (9.91 dB, 16% blue). SANA is the fastest 1024-native backend
+  (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR backend due to
+  the mismatch.
   Depth and seg maps are ignored (no depth/seg ControlNet exists for SANA).
 - **FLUX.2-klein img2img pseudo-ControlNet**: `--model flux2-klein` uses
   FLUX.2-klein-4B (Apache 2.0, ungated, 4B, 4-step distilled) as an

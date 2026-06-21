@@ -170,7 +170,7 @@ def test_sana_config_shape():
     assert cfg["base_id"] == "Efficient-Large-Model/Sana_600M_1024px_diffusers"
     assert cfg["controlnet_id"] == "ishan24/Sana_600M_1024px_ControlNet_diffusers"
     assert cfg["depth_scale"] is None
-    assert cfg["canny_scale"] == 0.8
+    assert cfg["canny_scale"] == 0.4
     assert cfg["seg_scale"] is None
     assert cfg["guidance"] == 4.5
     assert cfg["max_side"] == 1024

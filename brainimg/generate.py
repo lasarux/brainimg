@@ -267,8 +267,8 @@ SANA_CONTROLNET_HED_ID = "ishan24/Sana_600M_1024px_ControlNet_diffusers"
 # mismatch creates a PSNR-vs-color trade-off -- low scale (0.5) gives the
 # best PSNR (10.20 dB) but collapses the blue/purple band (20% vs source
 # 53%); high scale (1.0) preserves color (54% blue) but gives the worst
-# PSNR (8.69 dB). 0.8 is the compromise: 8.84 dB, 43% blue.
-SANA_CONTROLNET_SCALE = 0.8
+# PSNR (8.69 dB). 0.4 is the visually best compromise: 9.91 dB, 16% blue.
+SANA_CONTROLNET_SCALE = 0.4
 SANA_GUIDANCE_SCALE = 4.5
 SANA_DEFAULT_STEPS = 20
 SANA_MAX_DEFAULT_SIDE = 1024

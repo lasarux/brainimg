@@ -2,7 +2,7 @@
 
 A semantic image compression experiment. Instead of storing pixels, brainimg
 stores the **meaning** of an image (a text caption) plus a tiny **structural
-blueprint** (a 64x64 depth map + 64x64 Canny edge map) and a seed. On decode,
+blueprint** (a 128x128 depth map + 128x128 Canny edge map) and a seed. On decode,
 Stable Diffusion + two ControlNets regenerate a visually faithful image at any
 resolution.
 

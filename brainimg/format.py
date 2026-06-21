@@ -10,8 +10,8 @@ A `.brainimg` file is a small JSON document that stores the *meaning* and
       "original_height": 768,
       "prompt": "a red apple on a wooden table next to a window",
       "negative_prompt": "blurry, low quality, deformed",
-      "depth_map_b64": "<base64 64x64 JPEG>",
-      "canny_map_b64": "<base64 64x64 PNG>",
+      "depth_map_b64": "<base64 128x128 JPEG>",
+      "canny_map_b64": "<base64 128x128 PNG>",
       "seed": 42,
       "steps": 20
     }

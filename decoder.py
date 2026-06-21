@@ -62,23 +62,23 @@ def main(argv: list[str] | None = None) -> int:
         "--depth-scale",
         type=float,
         default=None,
-        help="depth ControlNet conditioning scale (default: 1.5 sd15, 1.0 sdxl, "
+        help="depth ControlNet conditioning scale (default: 0.8 sd15, 1.0 sdxl, "
         "0.85 zimage)",
     )
     parser.add_argument(
         "--canny-scale",
         type=float,
         default=None,
-        help="canny ControlNet conditioning scale (default: 1.2 sd15, 0.8 sdxl). "
+        help="canny ControlNet conditioning scale (default: 1.0 sd15, 0.8 sdxl). "
         "Ignored under --model zimage (depth-only).",
     )
     parser.add_argument(
         "--seg-scale",
         type=float,
         default=None,
-        help="segmentation ControlNet conditioning scale (default: 0.9). "
-        "Ignored when the file has no seg map, and under --model zimage "
-        "(depth-only).",
+        help="segmentation ControlNet conditioning scale (default: 1.0 sd15, "
+        "0.6 sdxl). Ignored when the file has no seg map, and under --model "
+        "zimage (depth-only).",
     )
     parser.add_argument(
         "--model",

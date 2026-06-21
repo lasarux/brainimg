@@ -88,11 +88,18 @@ DEFAULT_MODEL = "sd15"
 # Per-model generation defaults. ControlNet scales are high: structural
 # fidelity to the original is the whole point. SDXL Conditioning scales
 # tend to run a bit lower than SD 1.5 for comparable visual grip.
-SD15_CONTROLNET_DEPTH_SCALE = 1.5
-SD15_CONTROLNET_CANNY_SCALE = 1.2
-# Seg a bit lower: it biases layout/material more than exact geometry, so too
-# high a scale over-constrains and fights the depth map.
-SD15_CONTROLNET_SEG_SCALE = 0.9
+#
+# SD 1.5 defaults below were tuned via a grid sweep on samples/lenna.tiff
+# and samples/test512.jpg at 512x512 with sd15-turbo (8 steps, seed from
+# the blueprint). The old defaults (1.5/1.2/0.9/7.5) were set for the
+# Depth-Anything-Small + no-seg pipeline; with Depth-Anything-V2-Base +
+# the ADE20K seg ControlNet, lower depth + lower canny + seg at parity
+# beats the old stack on both samples -- the V2 depth map is sharper so
+# it over-constrains at 1.5, and the seg map adds material cues that
+# were missing before. See scripts/sweep_lenna.py for the sweep grid.
+SD15_CONTROLNET_DEPTH_SCALE = 0.8
+SD15_CONTROLNET_CANNY_SCALE = 1.0
+SD15_CONTROLNET_SEG_SCALE = 1.0
 SD15_GUIDANCE_SCALE = 7.5
 # Default generation side length. 512 is reasonable on a machine with plenty
 # of RAM; 256 is the safe ceiling on an 8 GB Apple Silicon Mac with int8.

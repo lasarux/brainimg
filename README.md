@@ -82,11 +82,12 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
 
 - **8 steps** (vs 20-30 for the non-turbo paths) — the main win on a CPU-only
   box, where each step costs the same wall time. Measured on the AMD CPU
-  target with `samples/lenna.tiff` (512x512, same seed + blueprint):
-  SD 1.5 turbo **51.6 s** vs ~3 min for the 30-step path (~3.5x faster, and
-  +0.44 dB PSNR — the distilled schedule lands closer to the conditioning
-  maps than 30-step UniPC on this image); SDXL turbo **84.2 s** vs ~17 min
-  for the 30-step path at 512² (~12x faster, at a small −0.23 dB cost).
+  target with `samples/lenna.tiff` (512x512, same seed + blueprint, after the
+  ControlNet scale tuning below): SD 1.5 turbo **50.1 s / 9.65 dB PSNR**
+  vs ~3 min / 8.70 dB for the 30-step path with the old defaults
+  (~3.5x faster and **+0.95 dB** — the distilled schedule + tuned scales both
+  help); SDXL turbo **84.2 s** vs ~17 min for the 30-step path at 512²
+  (~12x faster, at a small −0.23 dB cost).
 - **guidance_scale 7.0/7.5** (CFG-preserved LoRA; supports 5-8 if you tune
   `--cfg`). The 1/2/4-step LoRAs on the same repo want `--cfg 0`; not wired
   up by default.
@@ -220,7 +221,7 @@ python decoder.py out.brainimg -o recon.png --device cuda
 # Larger output on a high-RAM machine
 python decoder.py out.brainimg -o recon.png --device cpu --size 512x512
 
-# Tune ControlNet scales / guidance (defaults: depth 1.5, canny 1.2, seg 0.9, cfg 7.5)
+# Tune ControlNet scales / guidance (defaults: depth 0.8, canny 1.0, seg 1.0, cfg 7.5)
 python decoder.py out.brainimg -o recon.png --device cpu \
     --depth-scale 1.8 --canny-scale 1.0 --seg-scale 1.1 --cfg 8.5
 ```
@@ -333,22 +334,23 @@ Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
 
 | Backend | Steps | Wall time | MSE | PSNR (dB) | MAE |
 |---|---|---|---|---|---|
-| `sd15` (30-step, existing) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
-| `sd15-turbo` (Hyper-SD) | 8 | **51.6 s** | **7934.50** | **9.14** | **73.59** |
+| `sd15` (30-step, old defaults 1.5/1.2/0.9) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
+| `sd15-turbo` (old defaults 1.5/1.2/0.9) | 8 | 51.6 s | 7934.50 | 9.14 | 73.59 |
+| `sd15-turbo` (tuned defaults 0.8/1.0/1.0) | 8 | **50.1 s** | **7055.30** | **9.65** | **68.10** |
 | `sdxl` @ 1024 (existing) | 30 | ~17 min | 3943.84 | 12.17 | 51.85 |
 | `sdxl` @ 512 (existing) | 30 | — | 5774.05 | 10.52 | 58.79 |
 | `sdxl-turbo` @ 512 (Hyper-SD) | 8 | **84.2 s** | 6085.01 | 10.29 | 61.10 |
 | `zimage` (depth-only) | 8 | — | 7977.63 | 9.11 | 72.59 |
 | `flux-depth` (depth-only) | 30 | — | 3256.44 | 13.00 | 44.10 |
 
-Notes: SD 1.5 turbo *beats* the 30-step SD 1.5 path on Lenna (lower MSE,
-higher PSNR) at ~3.5x less wall time — the distilled schedule lands closer
-to the conditioning maps. SDXL turbo at 512² is within ~0.23 dB of the
-30-step SDXL at the same size, at ~12x less wall time; SDXL @ 1024 remains
-the SD-family fidelity leader. FLUX depth has the lowest raw MSE but is
+Notes: The scale tuning (depth 1.5 -> 0.8, canny 1.2 -> 1.0, seg 0.9 -> 1.0)
+lifted SD 1.5 turbo from 9.14 dB to 9.65 dB on Lenna — +0.51 dB from scales
+alone, on top of the +0.44 dB the distilled schedule already contributed
+vs the 30-step path. SDXL turbo at 512² is within ~0.23 dB of the 30-step
+SDXL at the same size, at ~12x less wall time; SDXL @ 1024 remains the
+SD-family fidelity leader. FLUX depth has the lowest raw MSE but is
 subject to the SDXL hue-distribution drift caveat on Lenna's pink/magenta
-palette. See `lenna_sd15_turbo_comparison.jpg` and
-`lenna_sdxl_turbo_comparison.jpg` for side-by-side.
+palette. See `lenna_sd15_turbo_comparison.jpg` for side-by-side.
 
 ## Project layout
 

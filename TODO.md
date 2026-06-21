@@ -18,13 +18,20 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       output size. Re-evaluate if the default output size moves to 1024
       (where 128 -> 1024 is an 8x stretch and 256 -> 1024 is 4x). MAP_SIZE
       stays at 128.
-- [ ] **Tune ControlNet scales / CFG for the new stack.** The current defaults
+- [x] **Tune ControlNet scales / CFG for the new stack.** The old defaults
       (depth 1.5, canny 1.2, seg 0.9, cfg 7.5) were set for the old
-      Depth-Anything-Small + no-seg pipeline. The CLI flags now exist
-      (`--depth-scale`, `--canny-scale`, `--seg-scale`, `--cfg`); run a small
-      sweep on `samples/lenna.tiff` + `samples/test512.jpg` and pick better
-      defaults for Depth-Anything-V2-Base + seg. Then update the module
-      constants in `brainimg/generate.py`.
+      Depth-Anything-Small + no-seg pipeline. A grid sweep on
+      `samples/lenna.tiff` + `samples/test512.jpg` at 512x512 with sd15-turbo
+      (scripts/sweep_lenna.py, 3 passes, ~35 configs) found that Depth-Anything-V2-Base's
+      sharper depth map over-constrains at 1.5 -- lowering it helps a lot --
+      and the new ADE20K seg ControlNet adds material cues that were missing,
+      so raising seg to parity with canny helps. New SD 1.5 defaults:
+      **depth 0.8, canny 1.0, seg 1.0, cfg 7.5** (was 1.5/1.2/0.9/7.5).
+      Measured lift on Lenna: SD 1.5 turbo 9.14 -> 9.65 dB (+0.51 dB from
+      scales alone, on top of the +0.44 dB the distilled schedule already
+      contributed vs the 30-step path). test512 confirms the same direction
+      (lower depth + seg at parity wins across both samples). SDXL defaults
+      left unchanged (1.0/0.8/0.6) -- they were already in the good region.
 - [ ] **Brightness clamp edge case.** The `[0.5, 2.0]` gain clamp in
       `_match_color_statistics` can't reach extreme targets (e.g. darkening
       210 -> 80 needs ratio 0.38, clamped to 0.5). Consider a per-channel

@@ -59,7 +59,7 @@ def main() -> int:
         ("Z-Image", "depth-only, 8-step", "lenna_zimage.png"),
         ("Qwen-Image", "depth-only, 50-step", "lenna_qwen_image.png"),
         ("HunyuanDiT full", "d+c, 50-step, 1024", "lenna_hunyuan_full.png"),
-        ("SANA", "HED/canny, 20-step, 1024", "lenna_sana_s0.6.png"),
+        ("SANA", "HED/canny, 20-step, 1024", "lenna_sana_s0.4.png"),
         ("FLUX.2-klein", "img2img, 4-step, 512", "lenna_flux2_klein.png"),
         ("FLUX depth", "30-step, FP8", "lenna_flux_depth.png"),
         ("FLUX depth turbo", "8-step Hyper-SD, FP8", "lenna_flux_depth_turbo.png"),

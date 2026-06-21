@@ -47,6 +47,11 @@ lenna_flux_depth.png
 lenna_flux_canny.png
 lenna_flux_depth_comparison.jpg
 lenna_flux_canny_comparison.jpg
+# Hyper-SD turbo decode artifacts
+lenna_sd15_turbo.png
+lenna_sdxl_turbo.png
+lenna_sd15_turbo_comparison.jpg
+lenna_sdxl_turbo_comparison.jpg
 
 # OS
 .DS_Store

@@ -30,12 +30,15 @@ def main() -> int:
     src_arr = np.array(src)
     recons = [
         ("SD15  512 (existing)", "lenna_recon.png"),
+        ("SD15  512 turbo 8-step", "lenna_sd15_turbo.png"),
         ("SDXL 1024 (existing)", "lenna_sdxl.png"),
         ("SDXL  512 (new)",      "lenna_sdxl_512.png"),
+        ("SDXL  512 turbo 8-step", "lenna_sdxl_turbo.png"),
         ("SDXL  512 fixed-prompt", "lenna_sdxl_fixed_prompt.png"),
         ("SDXL  512 with-hue",   "lenna_sdxl_512_with_hue.png"),
         ("FLUX depth 512",       "lenna_flux_depth.png"),
         ("FLUX canny 512",       "lenna_flux_canny.png"),
+        ("Z-Image depth 512",   "lenna_zimage.png"),
     ]
     print(f"{'recon':28s}  {'size':>11s}  {'MSE':>10s}  {'PSNR':>8s}  {'MAE':>7s}")
     print("-" * 72)

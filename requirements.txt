@@ -10,6 +10,7 @@ torchvision>=0.18
 transformers>=4.40
 diffusers>=0.38  # 0.38 ships Z-Image (ZImageControlNetPipeline + ZImageControlNetModel)
 accelerate>=0.30
+peft>=0.10  # LoRA loading for Hyper-SD sd15-turbo / sdxl-turbo distilled LoRAs
 # int8 quantization of the UNet/ControlNets on MPS (avoids fp16 NaN -> black image)
 optimum-quanto>=0.2.4
 

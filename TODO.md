@@ -31,11 +31,15 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       SD 1.5 / SDXL base + depth/canny/seg ControlNets. No new base model,
       no schema change -- the LoRA is ~70-150 MB, loaded + `fuse_lora(0.125)`
       + scheduler swapped to `DDIMScheduler(timestep_spacing="trailing")`
-      inside `_build_pipeline` (gated by `cfg["turbo"]`). ~4x faster on CPU
-      than the 20-30 step non-turbo paths, at a small quality cost. Turbo
+      inside `_build_pipeline` (gated by `cfg["turbo"]`). Turbo
       paths ignore the file's stored step count and use 8 steps unless
       `--steps` is passed; `--cfg` defaults stay at 7.5/7.0 (CFG-preserved
-      LoRAs support 5-8). The biggest win on the AMD CPU target where every
+      LoRAs support 5-8). `peft>=0.10` is required for LoRA loading.
+      Measured on the AMD CPU target with `samples/lenna.tiff` (512²,
+      same seed): SD 1.5 turbo 51.6 s vs ~3 min for the 30-step path
+      (+0.44 dB PSNR -- distilled schedule wins on this image), SDXL turbo
+      84.2 s at 512² vs ~17 min for the 30-step path at 512² (~12x faster
+      at −0.23 dB). The biggest win on the AMD CPU target where every
       step costs the same wall time.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1

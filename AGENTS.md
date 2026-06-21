@@ -28,7 +28,11 @@ for the full project description and `TODO.md` for planned decode-quality work.
 - **Decode**: `python decoder.py out.brainimg -o recon.png [--device cpu|mps|cuda] [--quantize] [--model ...]`
   - **AMD CPU target** (the dev box): `--device cpu` fp32, no quantization needed
     (188 GB RAM fits SDXL/Z-Image/FLUX). Add `--model sd15-turbo` / `sdxl-turbo`
-    for Hyper-SD 8-step distilled LoRA (~4x faster, small quality cost).
+    for Hyper-SD 8-step distilled LoRA — measured on `samples/lenna.tiff`
+    (512², same seed): SD 1.5 turbo 51.6 s (vs ~3 min for the 30-step path,
+    and +0.44 dB PSNR — distilled schedule lands closer to the maps on this
+    image), SDXL turbo 84.2 s at 512² (vs ~17 min for the 30-step path at 512²,
+    ~12x faster at −0.23 dB). `peft` is required for LoRA loading.
   - Best fidelity: `--device cpu` (fp32). Low-RAM: add `--quantize`.
   - Apple Silicon: `--device mps` uses int8 (fp16 NaNs on MPS). 512x512 OOMs on 8 GB; use 256.
 - Helpers: `python scripts/make_sample.py` (synthetic test image), `scripts/make_comparison.py`

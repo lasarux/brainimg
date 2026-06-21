@@ -81,16 +81,21 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
 `DDIMScheduler(timestep_spacing="trailing")` per the model card.
 
 - **8 steps** (vs 20-30 for the non-turbo paths) — the main win on a CPU-only
-  box, where each step costs the same wall time. Roughly **4x faster** than
-  the non-turbo SDXL path at 1024 on the same hardware.
+  box, where each step costs the same wall time. Measured on the AMD CPU
+  target with `samples/lenna.tiff` (512x512, same seed + blueprint):
+  SD 1.5 turbo **51.6 s** vs ~3 min for the 30-step path (~3.5x faster, and
+  +0.44 dB PSNR — the distilled schedule lands closer to the conditioning
+  maps than 30-step UniPC on this image); SDXL turbo **84.2 s** vs ~17 min
+  for the 30-step path at 512² (~12x faster, at a small −0.23 dB cost).
 - **guidance_scale 7.0/7.5** (CFG-preserved LoRA; supports 5-8 if you tune
   `--cfg`). The 1/2/4-step LoRAs on the same repo want `--cfg 0`; not wired
   up by default.
 - **Same fidelity maps** as `sd15` / `sdxl` — depth + canny + optional seg.
   No schema change; the blueprint is identical.
-- Small quality cost vs the 30-step non-turbo path (distillation trades a
-  little detail for the speedup); use `sd15` / `sdxl` when fidelity matters
-  most and wall time is not the bottleneck.
+- Small quality cost vs the 30-step non-turbo path on most images
+  (distillation trades a little detail for the speedup); use `sd15` /
+  `sdxl` when fidelity matters most and wall time is not the bottleneck.
+  On some images (Lenna included) the distilled schedule actually wins.
 
 ```bash
 # CPU-only with lots of RAM (the brainimg target): 8-step SDXL @ 1024
@@ -234,8 +239,8 @@ remain supported but are secondary.
 |---|---|---|---|---|
 | `cpu` (default target) | fp32 (no quantization) | ~10 GB SD 1.5 / ~17 GB SDXL | slow (min/image, SDXL @ 1024) | **best** (sd15/sdxl) |
 | `cpu --quantize` | int8 weights, fp32 activations | ~5 GB / ~9 GB | slow | good |
-| `cpu --model sd15-turbo` | fp32 + Hyper-SD 8-step LoRA | ~10 GB | **~4x faster** than sd15 | good |
-| `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **~4x faster** than sdxl @ 1024 | good |
+| `cpu --model sd15-turbo` | fp32 + Hyper-SD 8-step LoRA | ~10 GB | **~52 s @ 512²** | good |
+| `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **~84 s @ 512²** | good |
 | `cpu --model zimage` | bf16 (resident in RAM) | ~18 GB | very slow (8 steps, but big DiT) | good (depth-only) |
 | `cpu --model flux-depth --quantize` | bf16 + FP8 (RAM) | ~12 GB | very slow (30 steps) | good (depth-only) |
 | `cpu --model flux-depth` | bf16 (resident in RAM) | ~22 GB | very slow (30 steps) | good (depth-only) |
@@ -320,6 +325,30 @@ pytest                       # format tests, no models needed
 The captioner correctly described the scene ("a black puppy sitting on a
 wooden surface"); the decoder produced a visually faithful reconstruction. See
 `comparison.jpg` for a side-by-side.
+
+## Verified results (AMD CPU, 188 GB RAM)
+
+Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
+512x512 output). MSE / PSNR / MAE computed against the original at 512x512.
+
+| Backend | Steps | Wall time | MSE | PSNR (dB) | MAE |
+|---|---|---|---|---|---|
+| `sd15` (30-step, existing) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
+| `sd15-turbo` (Hyper-SD) | 8 | **51.6 s** | **7934.50** | **9.14** | **73.59** |
+| `sdxl` @ 1024 (existing) | 30 | ~17 min | 3943.84 | 12.17 | 51.85 |
+| `sdxl` @ 512 (existing) | 30 | — | 5774.05 | 10.52 | 58.79 |
+| `sdxl-turbo` @ 512 (Hyper-SD) | 8 | **84.2 s** | 6085.01 | 10.29 | 61.10 |
+| `zimage` (depth-only) | 8 | — | 7977.63 | 9.11 | 72.59 |
+| `flux-depth` (depth-only) | 30 | — | 3256.44 | 13.00 | 44.10 |
+
+Notes: SD 1.5 turbo *beats* the 30-step SD 1.5 path on Lenna (lower MSE,
+higher PSNR) at ~3.5x less wall time — the distilled schedule lands closer
+to the conditioning maps. SDXL turbo at 512² is within ~0.23 dB of the
+30-step SDXL at the same size, at ~12x less wall time; SDXL @ 1024 remains
+the SD-family fidelity leader. FLUX depth has the lowest raw MSE but is
+subject to the SDXL hue-distribution drift caveat on Lenna's pink/magenta
+palette. See `lenna_sd15_turbo_comparison.jpg` and
+`lenna_sdxl_turbo_comparison.jpg` for side-by-side.
 
 ## Project layout
 

@@ -68,6 +68,9 @@ lenna_qwen_image_comparison.jpg
 # SANA decode artifacts
 lenna_sana*.png
 
+# FLUX.2-klein decode artifacts
+lenna_flux2_klein*.png
+
 # HunyuanDiT decode artifacts
 lenna_hunyuan.png
 lenna_hunyuan_comparison.jpg

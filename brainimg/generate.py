@@ -274,6 +274,28 @@ SANA_DEFAULT_STEPS = 20
 SANA_MAX_DEFAULT_SIDE = 1024
 SANA_MAX_TOKENS = 300
 
+# --- FLUX.2-klein stack ----------------------------------------------------- #
+# Black Forest Labs' FLUX.2-klein-4B (Apache 2.0, ungated) is a 4B rectified
+# flow transformer that unifies generation and editing in a single compact
+# architecture. It's 4-step distilled with guidance_scale 1.0, runs on ~13 GB
+# VRAM, and uses diffusers' ``Flux2KleinPipeline``.
+#
+# FLUX.2-klein has no ControlNet -- it's an image-to-image model, not a
+# ControlNet model. We use it as a pseudo-ControlNet by feeding the blueprint's
+# depth map as the ``image`` parameter (the starting point for img2img). The
+# model encodes the depth map into latents and denoises from there with the
+# caption as the text guide. This is an experimental approach: img2img treats
+# the depth map as a noisy starting image rather than a conditioning signal,
+# so the structural grip is weaker than a true ControlNet. The blueprint's
+# canny and seg maps are ignored on this path (only one image input).
+#
+# bf16 throughout (FLUX.2's native dtype). 4 steps (distilled default).
+FLUX2_KLEIN_MODEL_ID = "black-forest-labs/FLUX.2-klein-4B"
+FLUX2_KLEIN_GUIDANCE_SCALE = 1.0
+FLUX2_KLEIN_DEFAULT_STEPS = 4
+FLUX2_KLEIN_MAX_DEFAULT_SIDE = 1024
+FLUX2_KLEIN_MAX_TOKENS = 512
+
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
 # ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
 # models down to 1-8 steps via trajectory-segmented consistency distillation,
@@ -497,6 +519,19 @@ def _model_config(model: str) -> dict:
             "max_side": SANA_MAX_DEFAULT_SIDE,
             "default_steps": SANA_DEFAULT_STEPS,
             "max_tokens": SANA_MAX_TOKENS,
+            "turbo": False,
+        }
+    if model == "flux2-klein":
+        # FLUX.2-klein-4B: img2img pseudo-ControlNet. Feed the depth map as
+        # the starting image (no real ControlNet exists for klein). 4-step
+        # distilled, guidance 1.0, Apache 2.0, ungated. Canny/seg ignored.
+        return {
+            "base_id": FLUX2_KLEIN_MODEL_ID,
+            "control_source": "depth",  # which b64 field on BrainimgData
+            "guidance": FLUX2_KLEIN_GUIDANCE_SCALE,
+            "max_side": FLUX2_KLEIN_MAX_DEFAULT_SIDE,
+            "default_steps": FLUX2_KLEIN_DEFAULT_STEPS,
+            "max_tokens": FLUX2_KLEIN_MAX_TOKENS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -1009,6 +1044,42 @@ def _build_sana_pipeline(device: str):
     return pipe, torch
 
 
+def _build_flux2_pipeline(device: str):
+    """Construct the FLUX.2-klein-4B img2img pipeline.
+
+    FLUX.2-klein-4B is a 4B distilled img2img model (Apache 2.0, ungated).
+    No ControlNet -- we feed the depth map as the ``image`` parameter (the
+    starting point for img2img). bf16 throughout (FLUX.2's native dtype).
+
+    Memory strategy mirrors the other bf16 DiT paths:
+      * cuda: ``pipe.to("cuda")``.
+      * mps:  ``enable_model_cpu_offload()``.
+      * cpu:  ``pipe.to("cpu")`` -- resident in host RAM (~13 GB bf16 for
+        the 4B DiT + VAE + text encoder).
+
+    Returns ``(pipe, torch)``.
+    """
+    import torch
+    from diffusers import Flux2KleinPipeline
+
+    cfg = _model_config("flux2-klein")
+    load_dtype = torch.bfloat16
+
+    pipe = Flux2KleinPipeline.from_pretrained(
+        cfg["base_id"],
+        torch_dtype=load_dtype,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
 def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
     """Construct the FLUX Control pipeline (flux-depth or flux-canny).
 
@@ -1215,6 +1286,14 @@ def generate_image(
             device_override=device_override,
             guidance_scale=guidance_scale,
             canny_scale=canny_scale,
+        )
+    if model == "flux2-klein":
+        return _generate_flux2(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
         )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
@@ -1537,6 +1616,63 @@ def _generate_sana(
         negative_prompt=data.negative_prompt,
         control_image=canny,
         controlnet_conditioning_scale=scale,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_flux2(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+) -> Image.Image:
+    """FLUX.2-klein-4B img2img path: depth map as the starting image.
+
+    FLUX.2-klein has no ControlNet. We feed the blueprint's depth map as the
+    ``image`` parameter -- the model encodes it into latents and denoises from
+    there with the caption as the text guide. This is an experimental
+    pseudo-ControlNet approach: img2img treats the depth map as a noisy
+    starting image rather than a conditioning signal, so the structural grip
+    is weaker than a true ControlNet. The blueprint's canny and seg maps are
+    *ignored* on this path (only one image input) -- no schema change. bf16
+    throughout, 4 steps (distilled), guidance 1.0.
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config("flux2-klein")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Feed the depth map as the img2img starting image. Canny/seg are unused.
+    depth = b64_to_image(data.depth_map_b64).convert("RGB").resize(
+        (target_w, target_h), Image.LANCZOS
+    )
+
+    pipe, torch = _build_flux2_pipeline(device)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        image=depth,
+        prompt=prompt,
         guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
         num_inference_steps=n_steps,
         height=target_h,

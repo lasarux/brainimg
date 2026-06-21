@@ -92,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             "hunyuan",
             "hunyuan-full",
             "sana",
+            "flux2-klein",
             "flux-depth",
             "flux-canny",
             "flux-depth-turbo",
@@ -120,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         "SANA. The blueprint's canny map is fed to the HED ControlNet "
         "(edge-to-edge, closest match); depth and seg are ignored. "
         "bf16, T5 text encoder, 20 steps. Needs ~5 GB RAM on CPU. "
+        "'flux2-klein' uses FLUX.2-klein-4B (Apache 2.0, 4B, ungated) as "
+        "img2img -- feeds the depth map as the starting image (no "
+        "ControlNet exists for klein). 4-step distilled, guidance 1.0. "
+        "Experimental pseudo-ControlNet approach; canny/seg are ignored. "
+        "~13 GB RAM on CPU. "
         "'flux-depth' uses FLUX.1-Depth-dev (~22 GB resident; pass "
         "--quantize for FP8 ~12 GB) and feeds the blueprint's depth map; "
         "'flux-canny' is the same but with FLUX.1-Canny-dev + the canny "
@@ -181,6 +187,14 @@ def main(argv: list[str] | None = None) -> int:
             mode = "bf16 + cpu-offload"
         else:
             mode = "bf16 (resident in RAM, ~5 GB)"
+    elif args.model == "flux2-klein":
+        # FLUX.2-klein-4B: bf16, img2img (depth map as starting image).
+        if device == "cuda":
+            mode = "bf16"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload"
+        else:
+            mode = "bf16 (resident in RAM, ~13 GB)"
     elif args.model == "zimage":
         # bf16 throughout. cuda: resident. mps: layers stream host<->device.
         # cpu: whole pipeline resident in host RAM (no offload -- diffusers'
@@ -213,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.model in (
         "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
+        "flux2-klein",
         "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
     ):
@@ -233,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         and not args.quantize
         and args.model not in (
             "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
+            "flux2-klein",
             "flux-depth", "flux-canny",
         )
         and args.model not in ("sd15-turbo", "sdxl-turbo")
@@ -267,6 +283,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : SANA on CPU keeps the whole bf16 pipeline in RAM (~5 GB).")
     if args.model == "sana":
         print("  note   : SANA uses an HED ControlNet fed the canny map; depth/seg are ignored.")
+    if args.model == "flux2-klein" and device != "cuda":
+        print("  note   : FLUX.2-klein without CUDA is slower than GPU but only 4 steps.")
+    if args.model == "flux2-klein" and device == "cpu":
+        print("  note   : FLUX.2-klein on CPU keeps the whole bf16 pipeline in RAM (~13 GB).")
+    if args.model == "flux2-klein":
+        print("  note   : FLUX.2-klein uses img2img (depth as start image); canny/seg ignored.")
     if args.model in (
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):

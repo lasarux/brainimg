@@ -121,7 +121,7 @@ def test_all_model_configs_carry_turbo_flag():
     """
     for model in (
         "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
-        "hunyuan", "hunyuan-full", "sana",
+        "hunyuan", "hunyuan-full", "sana", "flux2-klein",
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):
         cfg = _model_config(model)
@@ -176,6 +176,21 @@ def test_sana_config_shape():
     assert cfg["max_side"] == 1024
     assert cfg["default_steps"] == 20
     assert cfg["max_tokens"] == 300
+    assert cfg["turbo"] is False
+
+
+def test_flux2_klein_config_shape():
+    """FLUX.2-klein-4B config: img2img (depth map as starting image), bf16,
+    4-step distilled, guidance 1.0, Apache 2.0, ungated. No ControlNet --
+    control_source is "depth" (fed as the image parameter). Canny/seg
+    are ignored."""
+    cfg = _model_config("flux2-klein")
+    assert cfg["base_id"] == "black-forest-labs/FLUX.2-klein-4B"
+    assert cfg["control_source"] == "depth"
+    assert cfg["guidance"] == 1.0
+    assert cfg["max_side"] == 1024
+    assert cfg["default_steps"] == 4
+    assert cfg["max_tokens"] == 512
     assert cfg["turbo"] is False
 
 

@@ -52,18 +52,21 @@ for the full project description and `TODO.md` for planned decode-quality work.
   Union ControlNet, depth-only), `hunyuan` / `hunyuan-full` (HunyuanDiT v1.2
   Distilled/full, depth+canny ControlNets), `sana` (NVIDIA SANA 600M linear
   DiT, HED ControlNet fed the canny map — only edge ControlNet available),
-  `flux-depth` / `flux-canny` (FLUX.1 Control variants, channel-concat, one
-  conditioning image), and `flux-depth-turbo` / `flux-canny-turbo` (FLUX
-  Control + Hyper-SD 8-step FLUX LoRA, strips x_embedder/context_embedder
-  deltas that are shape-incompatible with the Control transformer).
+  `flux2-klein` (FLUX.2-klein-4B img2img, depth map as starting image — no
+  ControlNet, experimental pseudo-ControlNet), `flux-depth` / `flux-canny`
+  (FLUX.1 Control variants, channel-concat, one conditioning image), and
+  `flux-depth-turbo` / `flux-canny-turbo` (FLUX Control + Hyper-SD 8-step
+  FLUX LoRA, strips x_embedder/context_embedder deltas that are
+  shape-incompatible with the Control transformer).
   The zimage path lives in `_generate_zimage` / `_build_zimage_pipeline`,
   the qwen-image path in `_generate_qwen_image` / `_build_qwen_image_pipeline`,
   the hunyuan path in `_generate_hunyuan` / `_build_hunyuan_pipeline`,
   the sana path in `_generate_sana` / `_build_sana_pipeline`,
+  the flux2-klein path in `_generate_flux2` / `_build_flux2_pipeline`,
   the FLUX path in `_generate_flux` / `_build_flux_pipeline`, and the
   SD path (which also serves `*-turbo` via a `cfg["turbo"]` flag) in
   `_generate_sd` / `_build_pipeline`. Schema is unchanged — zimage/FLUX/
-  qwen-image/hunyuan/sana simply ignore the maps they don't use.
+  qwen-image/hunyuan/sana/flux2-klein simply ignore the maps they don't use.
 - **Encoder and decoder must stay separate processes** — models are never
   resident together (historical 8 GB Apple Silicon constraint; on the AMD CPU
   target with 188 GB this is less critical but still a clean separation).
@@ -135,6 +138,18 @@ for the full project description and `TODO.md` for planned decode-quality work.
   dB, 43% blue). SANA is the fastest 1024-native backend (52 s at 1024²,
   20 steps, ~5 GB RAM) but the lowest-PSNR backend due to the mismatch.
   Depth and seg maps are ignored (no depth/seg ControlNet exists for SANA).
+- **FLUX.2-klein img2img pseudo-ControlNet**: `--model flux2-klein` uses
+  FLUX.2-klein-4B (Apache 2.0, ungated, 4B, 4-step distilled) as an
+  image-to-image model, feeding the blueprint's depth map as the starting
+  image. No ControlNet exists for FLUX.2-klein -- this is an experimental
+  pseudo-ControlNet approach. The model "edits" the depth map into a
+  photorealistic image matching the caption, rather than being structurally
+  constrained by a ControlNet. The img2img approach gives the #2 PSNR
+  overall (13.76 dB at 512², after FLUX depth turbo's 14.49 dB) but
+  collapses the color palette (15% blue vs source 53%) -- the model
+  converts the depth map's grayscale into warm tones regardless of the
+  caption. 240 s at 512², 4 steps, ~13 GB RAM. Canny and seg maps are
+  ignored (only one image input).
 
 ## Conventions
 

@@ -126,6 +126,21 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       community diffusers conversion by ishan24 of the official NVlabs
       checkpoint; the base model is the diffusers port from
       Efficient-Large-Model.
+- [x] **FLUX.2-klein-4B img2img backend.** `--model flux2-klein` adds Black
+      Forest Labs' FLUX.2-klein-4B (Apache 2.0, ungated, 4B, 4-step
+      distilled) as an image-to-image model, feeding the blueprint's depth
+      map as the starting image. No ControlNet exists for FLUX.2-klein --
+      this is an experimental pseudo-ControlNet approach. The model "edits"
+      the depth map into a photorealistic image matching the caption, rather
+      than being structurally constrained by a ControlNet.
+      The img2img approach gives the #2 PSNR overall (13.76 dB at 512²,
+      after FLUX depth turbo's 14.49 dB) but collapses the color palette
+      (15% blue vs source 53%) -- the model converts the depth map's
+      grayscale into warm tones regardless of the caption. 240 s at 512²,
+      4 steps, ~13 GB RAM. Canny and seg maps are ignored (only one image
+      input). The only real FLUX.2 ControlNet (alibaba-pai Union, depth+canny)
+      requires the VideoX-Fun library + 32B gated FLUX.2-dev, which is
+      impractical on CPU.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

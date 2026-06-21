@@ -95,6 +95,14 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       1004 s / 13.39 dB PSNR — second only to FLUX depth turbo (14.49 dB),
       and beats FLUX depth at 512 (13.08 dB) thanks to 1024 resolution +
       two conditioning maps. License: tencent-hunyuan-community.
+      **Visual caveat**: despite scoring 13.39 dB PSNR (#2 by pixel
+      metrics), HunyuanDiT is visually the worst backend by a wide margin
+      -- visible artifacts and palette collapse that MSE/PSNR do not
+      capture. This is a concrete example of the pixel-metric-vs-perceptual
+      disconnect flagged in the paper (§4.7). The good MSE likely comes
+      from getting overall brightness/layout right at 1024² while producing
+      texture/feature artifacts. Not recommended for visual use; kept for
+      the systems-study comparison.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

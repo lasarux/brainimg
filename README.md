@@ -360,8 +360,13 @@ the Control variants; the decoder strips the `x_embedder` /
 `context_embedder` LoRA deltas (shape-incompatible with the Control
 transformer's extra input channels) and keeps the attention/FFN deltas.
 Z-Image is depth-only so it ignores the canny/seg maps; competitive with
-SD 1.5 turbo on MSE despite using only one conditioning map. See
-`lenna_grid.jpg` for a combined side-by-side grid of all backends.
+SD 1.5 turbo on MSE despite using only one conditioning map.
+**HunyuanDiT scores 13.39 dB (#2 by pixel metrics) but is visually the
+worst backend by a wide margin** — visible artifacts and palette collapse
+that MSE/PSNR do not capture. This is a concrete example of the
+pixel-metric-vs-perceptual disconnect: MSE rewards getting overall
+brightness/layout right but does not penalize texture/feature artifacts.
+See `lenna_grid.jpg` for a combined side-by-side grid of all backends.
 
 ## Project layout
 

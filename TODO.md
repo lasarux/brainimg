@@ -6,11 +6,18 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 
 ## Tier 2 — moderate lift (next up)
 
-- [ ] **Raise MAP_SIZE 128 -> 256.** Sharper conditioning maps (depth/canny/seg)
-      -> better structural fidelity at decode. File grows ~2-3x but stays in
-      the low-KB range. Requires re-encoding existing samples. Touch
-      `brainimg/format.py` `MAP_SIZE`; no decoder change (maps already upscale
-      to target size).
+- [~] **Raise MAP_SIZE 128 -> 256.** Tested on `samples/lenna.tiff` at 512x512
+      output (the brainimg target size) and it **regressed on every backend**:
+      SD 1.5 30-step -0.65 dB (8763 -> 10185 MSE), SD 1.5 turbo -0.85 dB
+      (7934 -> 9640), SDXL turbo -0.57 dB (6085 -> 6928). File also grew 2.5x
+      (7.9 KB -> 19.7 KB). The ControlNets appear over-constrained by the
+      sharper maps at 512x512 output -- 128 maps upscaled 4x to 512 give the
+      ControlNets the right amount of structural grip, while 256 maps
+      upscaled 2x over-specify edges/depth and fight the caption. The TODO
+      hypothesis ("sharper maps = better fidelity") did not hold at this
+      output size. Re-evaluate if the default output size moves to 1024
+      (where 128 -> 1024 is an 8x stretch and 256 -> 1024 is 4x). MAP_SIZE
+      stays at 128.
 - [ ] **Tune ControlNet scales / CFG for the new stack.** The current defaults
       (depth 1.5, canny 1.2, seg 0.9, cfg 7.5) were set for the old
       Depth-Anything-Small + no-seg pipeline. The CLI flags now exist

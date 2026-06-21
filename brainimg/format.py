@@ -37,6 +37,14 @@ DEFAULT_CAPTION_MODEL = "qwen2-vl-2b-4bit"
 # Downscaled conditioning map resolution. Larger -> better structural fidelity
 # at the cost of a slightly bigger file. 128 keeps the file in the low-KB range
 # while noticeably improving reconstruction quality over 64.
+#
+# Note: a 128 -> 256 bump was tested on samples/lenna.tiff at 512x512 output
+# (the brainimg target size) and regressed on every backend -- SD 1.5 30-step
+# -0.65 dB, SD 1.5 turbo -0.85 dB, SDXL turbo -0.57 dB -- while growing the
+# file 2.5x (7.9 KB -> 19.7 KB). The ControlNets appear over-constrained by
+# the sharper maps at this output size. Re-evaluate if the default output
+# size moves to 1024 (where 128 -> 512 is an 8x stretch and 256 -> 512 is
+# only 4x, so the sharper map may help there). See TODO.md tier 2.
 MAP_SIZE = 128
 
 REQUIRED_FIELDS = (

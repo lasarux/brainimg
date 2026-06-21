@@ -222,6 +222,24 @@ QWEN_IMAGE_DEFAULT_STEPS = 50
 QWEN_IMAGE_MAX_DEFAULT_SIDE = 1024
 QWEN_IMAGE_MAX_TOKENS = 512
 
+# --- HunyuanDiT stack -------------------------------------------------------- #
+# Tencent's Hunyuan-DiT (arXiv 2405.08748) is a bilingual (Chinese+English)
+# DiT with separate depth and canny ControlNets -- the same two-conditioner
+# pattern as SD 1.5/SDXL, not a Union net. The v1.2 Distilled variant supports
+# 25-step generation (half the standard 50). Uses BERT + T5 text encoders.
+# bf16 throughout (HunyuanDiT's native dtype; sidesteps the MPS fp16 NaN bug,
+# same as Z-Image/FLUX/Qwen-Image). The blueprint's seg map is ignored on
+# this path (no seg ControlNet exists for HunyuanDiT) -- no schema change.
+# License: tencent-hunyuan-community.
+HUNYUAN_MODEL_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled"
+HUNYUAN_CONTROLNET_DEPTH_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Depth"
+HUNYUAN_CONTROLNET_CANNY_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Canny"
+HUNYUAN_CONTROLNET_DEPTH_SCALE = 0.8
+HUNYUAN_CONTROLNET_CANNY_SCALE = 0.8
+HUNYUAN_GUIDANCE_SCALE = 6.0
+HUNYUAN_DEFAULT_STEPS = 25
+HUNYUAN_MAX_DEFAULT_SIDE = 1024
+
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
 # ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
 # models down to 1-8 steps via trajectory-segmented consistency distillation,
@@ -396,6 +414,23 @@ def _model_config(model: str) -> dict:
             "max_side": QWEN_IMAGE_MAX_DEFAULT_SIDE,
             "default_steps": QWEN_IMAGE_DEFAULT_STEPS,
             "max_tokens": QWEN_IMAGE_MAX_TOKENS,
+            "turbo": False,
+        }
+    if model == "hunyuan":
+        # Same pattern as SD 1.5/SDXL: two separate ControlNets (depth +
+        # canny), not a Union net. The blueprint's seg map is ignored (no
+        # seg ControlNet exists for HunyuanDiT). bf16 throughout, BERT +
+        # T5 text encoders. Uses the v1.2 Distilled variant (25 steps).
+        return {
+            "base_id": HUNYUAN_MODEL_ID,
+            "depth_id": HUNYUAN_CONTROLNET_DEPTH_ID,
+            "canny_id": HUNYUAN_CONTROLNET_CANNY_ID,
+            "depth_scale": HUNYUAN_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": HUNYUAN_CONTROLNET_CANNY_SCALE,
+            "seg_scale": None,
+            "guidance": HUNYUAN_GUIDANCE_SCALE,
+            "max_side": HUNYUAN_MAX_DEFAULT_SIDE,
+            "default_steps": HUNYUAN_DEFAULT_STEPS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -818,6 +853,55 @@ def _build_qwen_image_pipeline(device: str):
     return pipe, torch
 
 
+def _build_hunyuan_pipeline(device: str):
+    """Construct the HunyuanDiT + depth/canny ControlNet pipeline.
+
+    Same architectural pattern as SD 1.5/SDXL: two separate ControlNet
+    models (depth + canny), not a Union net. Uses the v1.2 Distilled variant
+    (25-step generation). bf16 throughout (HunyuanDiT's native dtype,
+    sidesteps the MPS fp16 NaN bug). The blueprint's seg map is ignored
+    (no seg ControlNet exists for HunyuanDiT) -- no schema change.
+
+    Memory strategy mirrors Z-Image/Qwen-Image:
+      * cuda: ``pipe.to("cuda")``.
+      * mps:  ``enable_model_cpu_offload()``.
+      * cpu:  ``pipe.to("cpu")`` -- resident in host RAM (~12 GB bf16 for
+        the distilled DiT + 2 ControlNets).
+
+    Returns ``(pipe, torch)``.
+    """
+    import torch
+    from diffusers import (
+        HunyuanDiT2DControlNetModel,
+        HunyuanDiTControlNetPipeline,
+    )
+
+    cfg = _model_config("hunyuan")
+    load_dtype = torch.bfloat16
+
+    controlnets = [
+        HunyuanDiT2DControlNetModel.from_pretrained(cfg["depth_id"], torch_dtype=load_dtype),
+        HunyuanDiT2DControlNetModel.from_pretrained(cfg["canny_id"], torch_dtype=load_dtype),
+    ]
+
+    pipe = HunyuanDiTControlNetPipeline.from_pretrained(
+        cfg["base_id"],
+        controlnet=controlnets,
+        torch_dtype=load_dtype,
+        safety_checker=None,
+        requires_safety_checker=False,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
 def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
     """Construct the FLUX Control pipeline (flux-depth or flux-canny).
 
@@ -1004,6 +1088,16 @@ def generate_image(
             device_override=device_override,
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
+        )
+    if model == "hunyuan":
+        return _generate_hunyuan(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+            canny_scale=canny_scale,
         )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
@@ -1211,6 +1305,69 @@ def _generate_qwen_image(
     image: Image.Image = result.images[0]
 
     # Harmless on Qwen-Image (no-op when targets == 0.0); corrects any color drift.
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_hunyuan(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+    canny_scale: float | None,
+) -> Image.Image:
+    """HunyuanDiT path: depth + canny ControlNets (two separate nets).
+
+    Same conditioning pattern as SD 1.5/SDXL: depth + canny, no seg (HunyuanDiT
+    has no seg ControlNet). Uses the v1.2 Distilled variant (25 steps).
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config("hunyuan")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Depth + canny conditioning (same as SD 1.5/SDXL). Seg is ignored.
+    conditioning = _load_conditioning_maps(data, target_w, target_h)
+    # _load_conditioning_maps returns [depth, canny, seg?]; HunyuanDiT has
+    # only 2 ControlNets so slice off the seg if present.
+    conditioning = conditioning[:2]
+    scales = [
+        depth_scale if depth_scale is not None else cfg["depth_scale"],
+        canny_scale if canny_scale is not None else cfg["canny_scale"],
+    ]
+
+    pipe, torch = _build_hunyuan_pipeline(device)
+
+    # HunyuanDiT uses a BERT tokenizer; the CLIP 77-token limit doesn't apply
+    # but we keep the style prefix gating for consistency (BERT can handle
+    # long prompts).
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=256)
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        prompt=prompt,
+        negative_prompt=data.negative_prompt,
+        control_image=conditioning,
+        controlnet_conditioning_scale=scales,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation
     )

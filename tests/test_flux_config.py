@@ -121,11 +121,28 @@ def test_all_model_configs_carry_turbo_flag():
     """
     for model in (
         "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
-        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
+        "hunyuan", "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):
         cfg = _model_config(model)
         assert "turbo" in cfg, f"{model} config missing turbo key"
         assert isinstance(cfg["turbo"], bool)
+
+
+def test_hunyuan_config_shape():
+    """HunyuanDiT config mirrors SD 1.5/SDXL: two separate ControlNets
+    (depth + canny), not a Union net. Seg is None (no seg ControlNet exists
+    for HunyuanDiT). Uses the v1.2 Distilled variant (25 steps)."""
+    cfg = _model_config("hunyuan")
+    assert cfg["base_id"] == "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled"
+    assert cfg["depth_id"] == "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Depth"
+    assert cfg["canny_id"] == "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Canny"
+    assert cfg["depth_scale"] == 0.8
+    assert cfg["canny_scale"] == 0.8
+    assert cfg["seg_scale"] is None
+    assert cfg["guidance"] == 6.0
+    assert cfg["max_side"] == 1024
+    assert cfg["default_steps"] == 25
+    assert cfg["turbo"] is False
 
 
 def test_qwen_image_config_shape():

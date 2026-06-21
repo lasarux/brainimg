@@ -66,6 +66,9 @@ lenna_flux_depth_turbo_comparison.jpg
 # Qwen-Image decode artifacts
 lenna_qwen_image.png
 lenna_qwen_image_comparison.jpg
+# HunyuanDiT decode artifacts
+lenna_hunyuan.png
+lenna_hunyuan_comparison.jpg
 
 # OS
 .DS_Store

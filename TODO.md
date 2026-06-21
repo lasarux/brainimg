@@ -85,6 +85,16 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       only, but slower (50 steps vs 8). Competitive with SDXL turbo (10.29
       dB) despite using only one conditioning map. Apache 2.0 license is a
       win over FLUX's non-commercial.
+- [x] **HunyuanDiT backend.** `--model hunyuan` adds Tencent's Hunyuan-DiT
+      v1.2 Distilled (arXiv 2405.08748, bilingual DiT) with separate depth +
+      canny ControlNets — the same two-conditioner pattern as SD 1.5/SDXL,
+      not a Union net. The blueprint's seg map is ignored (no seg ControlNet
+      exists for HunyuanDiT). bf16, BERT + T5 text encoders, 25 steps
+      (distilled). HunyuanDiT only supports fixed resolutions (1024, 1280,
+      etc.) — it auto-upscales 512 to 1024. Measured on Lenna at 1024²:
+      1004 s / 13.39 dB PSNR — second only to FLUX depth turbo (14.49 dB),
+      and beats FLUX depth at 512 (13.08 dB) thanks to 1024 resolution +
+      two conditioning maps. License: tencent-hunyuan-community.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

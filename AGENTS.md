@@ -48,16 +48,22 @@ for the full project description and `TODO.md` for planned decode-quality work.
   `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
   `sd15-turbo` / `sdxl-turbo` (same base + ControlNets + ByteDance Hyper-SD
   8-step distilled LoRA, DDIM trailing schedule), `zimage` (Z-Image-Turbo 6B
-  DiT + single Union ControlNet, depth-only), `flux-depth` / `flux-canny`
-  (FLUX.1 Control variants, channel-concat, one conditioning image), and
-  `flux-depth-turbo` / `flux-canny-turbo` (FLUX Control + Hyper-SD 8-step
-  FLUX LoRA, strips x_embedder/context_embedder deltas that are
-  shape-incompatible with the Control transformer).
+  DiT + single Union ControlNet, depth-only), `qwen-image` (Qwen-Image DiT +
+  Union ControlNet, depth-only), `hunyuan` / `hunyuan-full` (HunyuanDiT v1.2
+  Distilled/full, depth+canny ControlNets), `sana` (NVIDIA SANA 600M linear
+  DiT, HED ControlNet fed the canny map — only edge ControlNet available),
+  `flux-depth` / `flux-canny` (FLUX.1 Control variants, channel-concat, one
+  conditioning image), and `flux-depth-turbo` / `flux-canny-turbo` (FLUX
+  Control + Hyper-SD 8-step FLUX LoRA, strips x_embedder/context_embedder
+  deltas that are shape-incompatible with the Control transformer).
   The zimage path lives in `_generate_zimage` / `_build_zimage_pipeline`,
+  the qwen-image path in `_generate_qwen_image` / `_build_qwen_image_pipeline`,
+  the hunyuan path in `_generate_hunyuan` / `_build_hunyuan_pipeline`,
+  the sana path in `_generate_sana` / `_build_sana_pipeline`,
   the FLUX path in `_generate_flux` / `_build_flux_pipeline`, and the
   SD path (which also serves `*-turbo` via a `cfg["turbo"]` flag) in
-  `_generate_sd` / `_build_pipeline`. Schema is unchanged — zimage/FLUX
-  simply ignore the maps they don't use.
+  `_generate_sd` / `_build_pipeline`. Schema is unchanged — zimage/FLUX/
+  qwen-image/hunyuan/sana simply ignore the maps they don't use.
 - **Encoder and decoder must stay separate processes** — models are never
   resident together (historical 8 GB Apple Silicon constraint; on the AMD CPU
   target with 188 GB this is less critical but still a clean separation).
@@ -118,6 +124,17 @@ for the full project description and `TODO.md` for planned decode-quality work.
   shape-mismatch ValueError. The full `2.1-8steps` file (~6.4 GB, 5 control
   types) loads cleanly and is what the code pins. Re-evaluate if a future
   diffusers release adds the lite configs.
+- **SANA HED/canny mismatch**: `--model sana` uses NVIDIA's SANA 600M (MIT,
+  linear DiT) with an HED (soft-edge) ControlNet — the only ControlNet type
+  available for SANA. The blueprint's canny map is fed to the HED ControlNet
+  (both are edge maps, but HED produces soft probability edges while canny
+  produces hard binary edges). This type mismatch creates a PSNR-vs-color
+  trade-off: scale=0.5 gives the best PSNR (10.20 dB) but collapses the
+  blue/purple band (20% vs source 53%); scale=1.0 preserves color (54% blue)
+  but gives the worst PSNR (8.69 dB). The default 0.8 is a compromise (8.84
+  dB, 43% blue). SANA is the fastest 1024-native backend (52 s at 1024²,
+  20 steps, ~5 GB RAM) but the lowest-PSNR backend due to the mismatch.
+  Depth and seg maps are ignored (no depth/seg ControlNet exists for SANA).
 
 ## Conventions
 

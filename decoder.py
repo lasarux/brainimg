@@ -91,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             "qwen-image",
             "hunyuan",
             "hunyuan-full",
+            "sana",
             "flux-depth",
             "flux-canny",
             "flux-depth-turbo",
@@ -113,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
         "DiT, 25 steps) with separate depth + canny ControlNets (same "
         "two-conditioner pattern as sd15/sdxl; seg map ignored). bf16, "
         "BERT + T5 text encoders. Needs ~12 GB RAM resident on CPU. "
+        "'hunyuan-full' is the non-distilled variant (50 steps, same "
+        "ControlNets). 'sana' uses NVIDIA's SANA 600M (MIT, linear DiT) "
+        "with an HED ControlNet -- the only available ControlNet type for "
+        "SANA. The blueprint's canny map is fed to the HED ControlNet "
+        "(edge-to-edge, closest match); depth and seg are ignored. "
+        "bf16, T5 text encoder, 20 steps. Needs ~5 GB RAM on CPU. "
         "'flux-depth' uses FLUX.1-Depth-dev (~22 GB resident; pass "
         "--quantize for FP8 ~12 GB) and feeds the blueprint's depth map; "
         "'flux-canny' is the same but with FLUX.1-Canny-dev + the canny "
@@ -166,6 +173,14 @@ def main(argv: list[str] | None = None) -> int:
             mode = "bf16 + cpu-offload"
         else:
             mode = "bf16 (resident in RAM, ~20 GB)"
+    elif args.model == "sana":
+        # SANA: bf16, HED ControlNet (canny map fed to it), T5 text encoder.
+        if device == "cuda":
+            mode = "bf16"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload"
+        else:
+            mode = "bf16 (resident in RAM, ~5 GB)"
     elif args.model == "zimage":
         # bf16 throughout. cuda: resident. mps: layers stream host<->device.
         # cpu: whole pipeline resident in host RAM (no offload -- diffusers'
@@ -197,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     from brainimg.generate import _model_config
 
     if args.model in (
-        "zimage", "qwen-image", "hunyuan", "hunyuan-full", "flux-depth", "flux-canny",
+        "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
+        "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
     ):
         # Z-Image + Qwen-Image + FLUX (+ turbo) ignore the file's stored step
@@ -216,7 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         device == "cpu"
         and not args.quantize
         and args.model not in (
-            "zimage", "qwen-image", "hunyuan", "hunyuan-full", "flux-depth", "flux-canny",
+            "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
+            "flux-depth", "flux-canny",
         )
         and args.model not in ("sd15-turbo", "sdxl-turbo")
         and args.model not in ("flux-depth-turbo", "flux-canny-turbo")
@@ -244,6 +261,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : HunyuanDiT on CPU keeps the whole bf16 pipeline in RAM (~12 GB).")
     if args.model in ("hunyuan", "hunyuan-full"):
         print("  note   : HunyuanDiT uses depth + canny; seg map is ignored (no seg ControlNet).")
+    if args.model == "sana" and device != "cuda":
+        print("  note   : SANA without CUDA is slow (20 steps on CPU).")
+    if args.model == "sana" and device == "cpu":
+        print("  note   : SANA on CPU keeps the whole bf16 pipeline in RAM (~5 GB).")
+    if args.model == "sana":
+        print("  note   : SANA uses an HED ControlNet fed the canny map; depth/seg are ignored.")
     if args.model in (
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):

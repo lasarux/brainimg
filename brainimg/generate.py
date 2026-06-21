@@ -242,6 +242,38 @@ HUNYUAN_DEFAULT_STEPS = 25
 HUNYUAN_FULL_DEFAULT_STEPS = 50
 HUNYUAN_MAX_DEFAULT_SIDE = 1024
 
+# --- SANA stack ------------------------------------------------------------- #
+# NVIDIA's SANA (arXiv 2410.10629, MIT license) is a linear DiT optimized for
+# efficient high-resolution synthesis. The 600M variant at 1024px is the
+# smallest checkpoint; it uses a DC-AE VAE (32x spatial compression) and a T5
+# text encoder. diffusers ships ``SanaControlNetPipeline`` +
+# ``SanaControlNetModel`` since 0.38.
+#
+# Only an HED (soft-edge) ControlNet exists for SANA -- no depth or canny
+# ControlNet has been trained. HED and canny are both edge-detection methods,
+# so the blueprint's canny map is fed to the HED ControlNet as the closest
+# available conditioning type. This is a type mismatch (HED produces soft
+# probability edges, canny produces hard binary edges) and may limit fidelity
+# relative to backends with a true canny or depth ControlNet. The blueprint's
+# depth and seg maps are ignored on this path -- no schema change.
+#
+# The diffusers-format ControlNet is a community conversion (ishan24) of the
+# official NVlabs checkpoint. The base model is the diffusers-format port from
+# Efficient-Large-Model. bf16 throughout (SANA's native dtype, same as
+# Z-Image/HunyuanDiT/FLUX).
+SANA_MODEL_ID = "Efficient-Large-Model/Sana_600M_1024px_diffusers"
+SANA_CONTROLNET_HED_ID = "ishan24/Sana_600M_1024px_ControlNet_diffusers"
+# HED ControlNet scale: tuned via sweep on Lenna at 1024². The HED/canny
+# mismatch creates a PSNR-vs-color trade-off -- low scale (0.5) gives the
+# best PSNR (10.20 dB) but collapses the blue/purple band (20% vs source
+# 53%); high scale (1.0) preserves color (54% blue) but gives the worst
+# PSNR (8.69 dB). 0.8 is the compromise: 8.84 dB, 43% blue.
+SANA_CONTROLNET_SCALE = 0.8
+SANA_GUIDANCE_SCALE = 4.5
+SANA_DEFAULT_STEPS = 20
+SANA_MAX_DEFAULT_SIDE = 1024
+SANA_MAX_TOKENS = 300
+
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
 # ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
 # models down to 1-8 steps via trajectory-segmented consistency distillation,
@@ -449,6 +481,22 @@ def _model_config(model: str) -> dict:
             "guidance": HUNYUAN_GUIDANCE_SCALE,
             "max_side": HUNYUAN_MAX_DEFAULT_SIDE,
             "default_steps": HUNYUAN_FULL_DEFAULT_STEPS,
+            "turbo": False,
+        }
+    if model == "sana":
+        # SANA: single HED ControlNet, fed the canny map (edge-to-edge).
+        # Depth and seg are ignored (no depth/seg ControlNet exists for SANA).
+        # bf16, T5 text encoder (300-token max). 600M DiT, 1024px native.
+        return {
+            "base_id": SANA_MODEL_ID,
+            "controlnet_id": SANA_CONTROLNET_HED_ID,
+            "depth_scale": None,
+            "canny_scale": SANA_CONTROLNET_SCALE,
+            "seg_scale": None,
+            "guidance": SANA_GUIDANCE_SCALE,
+            "max_side": SANA_MAX_DEFAULT_SIDE,
+            "default_steps": SANA_DEFAULT_STEPS,
+            "max_tokens": SANA_MAX_TOKENS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -920,6 +968,47 @@ def _build_hunyuan_pipeline(device: str, model: str = "hunyuan"):
     return pipe, torch
 
 
+def _build_sana_pipeline(device: str):
+    """Construct the SANA + HED ControlNet pipeline.
+
+    SANA is a 600M linear DiT with a DC-AE VAE and T5 text encoder. The only
+    available ControlNet is HED (soft-edge); we feed the blueprint's canny map
+    to it (both are edge maps -- a type mismatch but the closest available
+    conditioning). bf16 throughout (SANA's native dtype).
+
+    Memory strategy mirrors Z-Image/Qwen-Image/HunyuanDiT:
+      * cuda: ``pipe.to("cuda")``.
+      * mps:  ``enable_model_cpu_offload()``.
+      * cpu:  ``pipe.to("cpu")`` -- resident in host RAM (~5 GB bf16 for the
+        600M DiT + ControlNet + DC-AE VAE + T5 encoder).
+
+    Returns ``(pipe, torch)``.
+    """
+    import torch
+    from diffusers import SanaControlNetModel, SanaControlNetPipeline
+
+    cfg = _model_config("sana")
+    load_dtype = torch.bfloat16
+
+    controlnet = SanaControlNetModel.from_pretrained(
+        cfg["controlnet_id"], torch_dtype=load_dtype
+    )
+    pipe = SanaControlNetPipeline.from_pretrained(
+        cfg["base_id"],
+        controlnet=controlnet,
+        torch_dtype=load_dtype,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
 def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
     """Construct the FLUX Control pipeline (flux-depth or flux-canny).
 
@@ -1117,6 +1206,15 @@ def generate_image(
             depth_scale=depth_scale,
             canny_scale=canny_scale,
             model=model,
+        )
+    if model == "sana":
+        return _generate_sana(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
+            canny_scale=canny_scale,
         )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
@@ -1381,6 +1479,64 @@ def _generate_hunyuan(
         negative_prompt=data.negative_prompt,
         control_image=conditioning,
         controlnet_conditioning_scale=scales,
+        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_sana(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+    canny_scale: float | None,
+) -> Image.Image:
+    """SANA path: single HED ControlNet fed the canny map.
+
+    SANA only has an HED (soft-edge) ControlNet. We feed the blueprint's canny
+    map as the closest available edge-based conditioning. The blueprint's depth
+    and seg maps are *ignored* on this path (no depth/seg ControlNet exists for
+    SANA) -- no schema change. bf16 throughout, T5 text encoder (300 tokens).
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config("sana")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Feed the canny map to the HED ControlNet (edge-to-edge, closest match).
+    # Depth and seg are unused on this path.
+    canny = b64_to_image(data.canny_map_b64).convert("RGB").resize(
+        (target_w, target_h), Image.LANCZOS
+    )
+    scale = canny_scale if canny_scale is not None else cfg["canny_scale"]
+
+    pipe, torch = _build_sana_pipeline(device)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        prompt=prompt,
+        negative_prompt=data.negative_prompt,
+        control_image=canny,
+        controlnet_conditioning_scale=scale,
         guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
         num_inference_steps=n_steps,
         height=target_h,

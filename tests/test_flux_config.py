@@ -121,7 +121,8 @@ def test_all_model_configs_carry_turbo_flag():
     """
     for model in (
         "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
-        "hunyuan", "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
+        "hunyuan", "hunyuan-full", "sana",
+        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):
         cfg = _model_config(model)
         assert "turbo" in cfg, f"{model} config missing turbo key"
@@ -158,6 +159,23 @@ def test_qwen_image_config_shape():
     assert cfg["max_side"] == 1024
     assert cfg["default_steps"] == 50
     assert cfg["max_tokens"] == 512
+    assert cfg["turbo"] is False
+
+
+def test_sana_config_shape():
+    """SANA config: single HED ControlNet (canny map fed to it), bf16, T5
+    text encoder (300 tokens). Depth and seg are None (no depth/seg
+    ControlNet exists for SANA)."""
+    cfg = _model_config("sana")
+    assert cfg["base_id"] == "Efficient-Large-Model/Sana_600M_1024px_diffusers"
+    assert cfg["controlnet_id"] == "ishan24/Sana_600M_1024px_ControlNet_diffusers"
+    assert cfg["depth_scale"] is None
+    assert cfg["canny_scale"] == 0.8
+    assert cfg["seg_scale"] is None
+    assert cfg["guidance"] == 4.5
+    assert cfg["max_side"] == 1024
+    assert cfg["default_steps"] == 20
+    assert cfg["max_tokens"] == 300
     assert cfg["turbo"] is False
 
 

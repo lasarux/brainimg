@@ -110,6 +110,22 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       trained primarily on Chinese data; the English caption + Lenna's
       pink/magenta palette produces inferior results regardless of tuning.
       Not recommended for visual use; kept for the systems-study comparison.
+- [x] **SANA backend.** `--model sana` adds NVIDIA's SANA 600M (MIT, linear
+      DiT, arXiv 2410.10629) with an HED ControlNet — the only ControlNet
+      type available for SANA. The blueprint's canny map is fed to the HED
+      ControlNet (both are edge maps, but HED produces soft probability
+      edges while canny produces hard binary edges). This type mismatch
+      creates a PSNR-vs-color trade-off: a ControlNet scale sweep on Lenna
+      at 1024² shows scale=0.5 gives the best PSNR (10.20 dB) but collapses
+      the blue/purple band (20% vs source 53%), while scale=1.0 preserves
+      color (54% blue) but gives the worst PSNR (8.69 dB). The default 0.8
+      is a compromise (8.84 dB, 43% blue). SANA is the fastest 1024-native
+      backend (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR
+      backend due to the HED/canny mismatch. Depth and seg maps are ignored
+      (no depth/seg ControlNet exists for SANA). The ControlNet is a
+      community diffusers conversion by ishan24 of the official NVlabs
+      checkpoint; the base model is the diffusers port from
+      Efficient-Large-Model.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

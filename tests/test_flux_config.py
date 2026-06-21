@@ -120,12 +120,28 @@ def test_all_model_configs_carry_turbo_flag():
     paths must set it to False explicitly.
     """
     for model in (
-        "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage",
+        "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):
         cfg = _model_config(model)
         assert "turbo" in cfg, f"{model} config missing turbo key"
         assert isinstance(cfg["turbo"], bool)
+
+
+def test_qwen_image_config_shape():
+    """Qwen-Image config mirrors Z-Image's: single Union ControlNet
+    (depth-only), bf16, Qwen text encoder (512 tokens)."""
+    cfg = _model_config("qwen-image")
+    assert cfg["base_id"] == "Qwen/Qwen-Image"
+    assert cfg["controlnet_id"] == "InstantX/Qwen-Image-ControlNet-Union"
+    assert cfg["depth_scale"] == 0.9
+    assert cfg["canny_scale"] is None
+    assert cfg["seg_scale"] is None
+    assert cfg["guidance"] == 4.0  # true_cfg_scale
+    assert cfg["max_side"] == 1024
+    assert cfg["default_steps"] == 50
+    assert cfg["max_tokens"] == 512
+    assert cfg["turbo"] is False
 
 
 def test_flux_turbo_reuses_flux_base():

@@ -63,6 +63,9 @@ lenna_grid.jpg
 # Hyper-SD FLUX turbo artifacts
 lenna_flux_depth_turbo.png
 lenna_flux_depth_turbo_comparison.jpg
+# Qwen-Image decode artifacts
+lenna_qwen_image.png
+lenna_qwen_image_comparison.jpg
 
 # OS
 .DS_Store

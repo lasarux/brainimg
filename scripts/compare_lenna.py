@@ -36,6 +36,7 @@ def main() -> int:
         ("SDXL  512 30-step new scales", "lenna_sdxl_512_new_scales.png"),
         ("SDXL  512 turbo 8-step", "lenna_sdxl_turbo.png"),
         ("Z-Image depth 512", "lenna_zimage.png"),
+        ("Qwen-Image depth 512", "lenna_qwen_image.png"),
         ("FLUX depth 512 30-step FP8", "lenna_flux_depth.png"),
         ("FLUX depth 512 turbo 8-step FP8", "lenna_flux_depth_turbo.png"),
     ]

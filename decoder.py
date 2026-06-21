@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             "sdxl",
             "sdxl-turbo",
             "zimage",
+            "qwen-image",
             "flux-depth",
             "flux-canny",
             "flux-depth-turbo",
@@ -102,15 +103,18 @@ def main(argv: list[str] | None = None) -> int:
         "instead of 20-30, guidance scale 7.0/7.5). 'zimage' uses "
         "Tongyi-MAI/Z-Image-Turbo (6B bf16 DiT) + the alibaba-pai Union "
         "ControlNet (depth-only; canny and seg from the blueprint are "
-        "ignored). Needs ~16 GB VRAM; 8 GB Apple Silicon should use 'sd15'. "
-        "8 steps, fast on CUDA. 'flux-depth' uses FLUX.1-Depth-dev (~22 GB "
-        "resident; pass --quantize for FP8 ~12 GB) and feeds the blueprint's "
-        "depth map; 'flux-canny' is the same but with FLUX.1-Canny-dev + "
-        "the canny map. Both ignore the other map and any seg map "
-        "(channel-concat control, one image). 'flux-depth-turbo' / "
-        "'flux-canny-turbo' add Hyper-SD's 8-step FLUX LoRA on top of the "
-        "same control pipeline -- drops FLUX from 30 to 8 steps, guidance "
-        "3.5 (the dev default). ~4-5x faster on CPU.",
+        "ignored). 'qwen-image' uses Alibaba's Qwen-Image (Apache 2.0 DiT) "
+        "+ InstantX Union ControlNet (depth-only; canny and seg ignored, "
+        "same as zimage). 50 steps, Qwen text encoder (512 tokens), "
+        "true_cfg_scale 4.0. Needs ~20 GB RAM resident on CPU. "
+        "'flux-depth' uses FLUX.1-Depth-dev (~22 GB resident; pass "
+        "--quantize for FP8 ~12 GB) and feeds the blueprint's depth map; "
+        "'flux-canny' is the same but with FLUX.1-Canny-dev + the canny "
+        "map. Both ignore the other map and any seg map (channel-concat "
+        "control, one image). 'flux-depth-turbo' / 'flux-canny-turbo' add "
+        "Hyper-SD's 8-step FLUX LoRA on top of the same control pipeline "
+        "-- drops FLUX from 30 to 8 steps, guidance 3.5 (the dev default). "
+        "~4-5x faster on CPU.",
     )
     args = parser.parse_args(argv)
 
@@ -138,6 +142,15 @@ def main(argv: list[str] | None = None) -> int:
             mode = f"bf16 + cpu-offload{turbo_suffix}"
         else:
             mode = f"bf16 (resident in RAM, ~22 GB){turbo_suffix}"
+    elif args.model == "qwen-image":
+        # Qwen-Image: bf16, Union ControlNet (depth-only), Qwen text encoder.
+        # Same memory strategy as Z-Image.
+        if device == "cuda":
+            mode = "bf16"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload"
+        else:
+            mode = "bf16 (resident in RAM, ~20 GB)"
     elif args.model == "zimage":
         # bf16 throughout. cuda: resident. mps: layers stream host<->device.
         # cpu: whole pipeline resident in host RAM (no offload -- diffusers'
@@ -169,11 +182,11 @@ def main(argv: list[str] | None = None) -> int:
     from brainimg.generate import _model_config
 
     if args.model in (
-        "zimage", "flux-depth", "flux-canny",
+        "zimage", "qwen-image", "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
     ):
-        # Z-Image + FLUX (+ turbo) ignore the file's stored step count (tuned
-        # for SD 1.5); show the effective step count they actually use.
+        # Z-Image + Qwen-Image + FLUX (+ turbo) ignore the file's stored step
+        # count (tuned for SD 1.5); show the effective step count they use.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
     elif args.model in ("sd15-turbo", "sdxl-turbo"):
@@ -187,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     if (
         device == "cpu"
         and not args.quantize
-        and args.model not in ("zimage", "flux-depth", "flux-canny")
+        and args.model not in ("zimage", "qwen-image", "flux-depth", "flux-canny")
         and args.model not in ("sd15-turbo", "sdxl-turbo")
         and args.model not in ("flux-depth-turbo", "flux-canny-turbo")
     ):
@@ -202,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : Z-Image on CPU keeps the whole bf16 pipeline in RAM (~18 GB).")
     if args.model == "zimage":
         print("  note   : Z-Image path uses depth only; canny/seg maps are ignored.")
+    if args.model == "qwen-image" and device != "cuda":
+        print("  note   : Qwen-Image without CUDA is slow (50 steps on CPU).")
+    if args.model == "qwen-image" and device == "cpu":
+        print("  note   : Qwen-Image on CPU keeps the whole bf16 pipeline in RAM (~20 GB).")
+    if args.model == "qwen-image":
+        print("  note   : Qwen-Image path uses depth only; canny/seg maps are ignored.")
     if args.model in (
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
     ):

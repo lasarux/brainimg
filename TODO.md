@@ -72,6 +72,19 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       internally). Measured on Lenna 512² FP8: 165.8 s / 14.49 dB PSNR vs
       654 s / 13.08 dB for the 30-step path -- the 8-step distilled schedule
       actually **beats** the 30-step FLUX by +1.41 dB at ~4x less wall time.
+- [x] **Qwen-Image backend.** `--model qwen-image` adds Alibaba's Qwen-Image
+      (arXiv 2508.02324, Apache 2.0 DiT) + InstantX's Union ControlNet
+      (canny + depth + pose + soft-edge in one model, depth-only on this
+      path). Same pattern as Z-Image: single Union ControlNet, bf16, Qwen
+      text encoder (512 tokens), blueprint's canny/seg ignored (no schema
+      change). `QwenImageControlNetPipeline` already in diffusers 0.38;
+      `InstantX/Qwen-Image-ControlNet-Union` is ungated (Apache 2.0).
+      Defaults: 50 steps, true_cfg_scale 4.0, controlnet_conditioning_scale
+      0.9, 1024 max side. Measured on Lenna 512² CPU: 1436 s / 9.80 dB PSNR
+      -- better than Z-Image (9.29 dB) and SD 1.5 turbo (9.65 dB) at depth-
+      only, but slower (50 steps vs 8). Competitive with SDXL turbo (10.29
+      dB) despite using only one conditioning map. Apache 2.0 license is a
+      win over FLUX's non-commercial.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

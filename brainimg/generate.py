@@ -202,6 +202,26 @@ FLUX_TURBO_LORA_FILE = "Hyper-FLUX.1-dev-8steps-lora.safetensors"
 FLUX_TURBO_DEFAULT_STEPS = 8
 FLUX_TURBO_GUIDANCE_SCALE = 3.5
 
+# --- Qwen-Image stack -------------------------------------------------------- #
+# Alibaba's Qwen-Image (arXiv 2508.02324, Apache 2.0) is a new DiT with a Qwen
+# text encoder (512-token limit, same as Z-Image) and a Union ControlNet from
+# InstantX that supports canny + depth + pose + soft-edge in one model. We feed
+# depth (the strongest structural cue), same as Z-Image. The Union ControlNet
+# is a single network (not a separate ControlNet model per type), so the
+# blueprint's canny/seg maps are ignored on this path -- no schema change.
+# bf16 throughout (Qwen-Image is bf16-native; sidesteps the MPS fp16 NaN bug,
+# same as Z-Image/FLUX). 50 steps by default (the model card's default);
+# true_cfg_scale 4.0 (Qwen-Image's CFG param -- not the same as guidance_scale,
+# which is None and unused on this pipeline).
+QWEN_IMAGE_MODEL_ID = "Qwen/Qwen-Image"
+QWEN_IMAGE_CONTROLNET_ID = "InstantX/Qwen-Image-ControlNet-Union"
+# Per the model card: controlnet_conditioning_scale in [0.8, 1.0] for depth.
+QWEN_IMAGE_CONTROLNET_SCALE = 0.9
+QWEN_IMAGE_TRUE_CFG_SCALE = 4.0
+QWEN_IMAGE_DEFAULT_STEPS = 50
+QWEN_IMAGE_MAX_DEFAULT_SIDE = 1024
+QWEN_IMAGE_MAX_TOKENS = 512
+
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
 # ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
 # models down to 1-8 steps via trajectory-segmented consistency distillation,
@@ -359,6 +379,23 @@ def _model_config(model: str) -> dict:
             "max_side": ZIMAGE_MAX_DEFAULT_SIDE,
             "default_steps": ZIMAGE_DEFAULT_STEPS,
             "max_tokens": ZIMAGE_MAX_TOKENS,
+            "turbo": False,
+        }
+    if model == "qwen-image":
+        # Same pattern as Z-Image: single Union ControlNet (depth-only),
+        # bf16, Qwen text encoder (512 tokens). The Union net supports
+        # canny + depth + pose + soft-edge; we feed depth. The blueprint's
+        # canny/seg maps are ignored (no schema change).
+        return {
+            "base_id": QWEN_IMAGE_MODEL_ID,
+            "controlnet_id": QWEN_IMAGE_CONTROLNET_ID,
+            "depth_scale": QWEN_IMAGE_CONTROLNET_SCALE,
+            "canny_scale": None,
+            "seg_scale": None,
+            "guidance": QWEN_IMAGE_TRUE_CFG_SCALE,
+            "max_side": QWEN_IMAGE_MAX_DEFAULT_SIDE,
+            "default_steps": QWEN_IMAGE_DEFAULT_STEPS,
+            "max_tokens": QWEN_IMAGE_MAX_TOKENS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -734,6 +771,53 @@ def _build_zimage_pipeline(device: str):
     return pipe, torch
 
 
+def _build_qwen_image_pipeline(device: str):
+    """Construct the Qwen-Image + Union ControlNet pipeline.
+
+    Same architectural pattern as Z-Image: a single Union ControlNet (one
+    conditioning image, depth), bf16 throughout (Qwen-Image's native dtype),
+    Qwen text encoder (512 tokens). The Union net supports canny + depth +
+    pose + soft-edge; we feed depth. The blueprint's canny/seg maps are
+    ignored (no schema change).
+
+    Memory strategy mirrors Z-Image:
+      * cuda: ``pipe.to("cuda")``.
+      * mps:  ``enable_model_cpu_offload()`` streams layers host<->device.
+      * cpu:  ``pipe.to("cpu")`` keeps the whole pipeline resident in host
+        RAM. ``enable_model_cpu_offload`` raises ``RuntimeError`` without an
+        accelerator (same constraint as Z-Image/FLUX). Qwen-Image uses a
+        Qwen2.5-VL text encoder (~7B VLM) so the resident set is heavier than
+        Z-Image -- roughly ~20 GB in bf16.
+
+    Returns ``(pipe, torch)`` to match the SD/Z-Image/FLUX builder signature.
+    """
+    import torch
+    from diffusers import QwenImageControlNetModel, QwenImageControlNetPipeline
+
+    cfg = _model_config("qwen-image")
+    load_dtype = torch.bfloat16
+
+    controlnet = QwenImageControlNetModel.from_pretrained(
+        cfg["controlnet_id"], torch_dtype=load_dtype
+    )
+    pipe = QwenImageControlNetPipeline.from_pretrained(
+        cfg["base_id"],
+        controlnet=controlnet,
+        torch_dtype=load_dtype,
+    )
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        # Pure CPU: keep everything resident in host RAM (no offload trick
+        # on a box without an accelerator, same as Z-Image/FLUX).
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
 def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
     """Construct the FLUX Control pipeline (flux-depth or flux-canny).
 
@@ -912,6 +996,15 @@ def generate_image(
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
         )
+    if model == "qwen-image":
+        return _generate_qwen_image(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+        )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
             data,
@@ -1057,6 +1150,67 @@ def _generate_zimage(
     image: Image.Image = result.images[0]
 
     # Harmless on Z-Image (no-op when targets == 0.0); corrects any color drift.
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_qwen_image(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+) -> Image.Image:
+    """Qwen-Image path: single Union ControlNet fed the depth map.
+
+    Same pattern as Z-Image -- the Union net accepts one conditioning image
+    and has no seg mode. The blueprint's canny and segmentation maps are
+    *ignored* here (no schema change). Qwen-Image uses ``true_cfg_scale``
+    (not ``guidance_scale``) for CFG; the user's ``--cfg`` maps to it.
+    """
+    device = device_override or get_torch_device()
+    cfg = _model_config("qwen-image")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    # Qwen-Image is not distilled; 50 steps by default (the model card).
+    n_steps = steps or cfg["default_steps"]
+
+    # Only depth is fed to the Union ControlNet. canny/seg are unused.
+    depth = b64_to_image(data.depth_map_b64).convert("RGB").resize(
+        (target_w, target_h), Image.LANCZOS
+    )
+    scale = depth_scale if depth_scale is not None else cfg["depth_scale"]
+
+    pipe, torch = _build_qwen_image_pipeline(device)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    # Qwen-Image uses true_cfg_scale (not guidance_scale). The generator
+    # lives on the host when cpu-offloaded; pin it to cpu for mps/cpu paths.
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = pipe(
+        prompt=prompt,
+        negative_prompt=data.negative_prompt,
+        control_image=depth,
+        controlnet_conditioning_scale=scale,
+        true_cfg_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+        num_inference_steps=n_steps,
+        height=target_h,
+        width=target_w,
+        generator=gen,
+    )
+    image: Image.Image = result.images[0]
+
+    # Harmless on Qwen-Image (no-op when targets == 0.0); corrects any color drift.
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation
     )

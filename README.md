@@ -20,6 +20,7 @@ resolution.
 | Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` (+ `lllyasviel/control_v11p_sd15_seg` when the blueprint has a seg map) |
 | Image generation (decoder, `--model sd15-turbo` / `sdxl-turbo`) | PyTorch | same SD 1.5 / SDXL base + ControlNets + ByteDance **Hyper-SD** 8-step distilled LoRA (`ByteDance/Hyper-SD`) |
 | Image generation (decoder, `--model zimage`) | PyTorch + bf16 | `Tongyi-MAI/Z-Image-Turbo` (6B DiT) + `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` (8-step distill) |
+| Image generation (decoder, `--model qwen-image`) | PyTorch + bf16 | `Qwen/Qwen-Image` (DiT, Apache 2.0) + `InstantX/Qwen-Image-ControlNet-Union` (depth-only) |
 | Image generation (decoder, `--model flux-depth` / `--model flux-canny`) | PyTorch + bf16 (+ optional FP8) | `black-forest-labs/FLUX.1-Depth-dev` / `FLUX.1-Canny-dev` (12B MMDiT + T5-XXL; one conditioning image, channel-concat) |
 
 Captioning uses the MLX 4-bit model on Apple Silicon (fast, low memory) and
@@ -340,6 +341,7 @@ Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
 | `sdxl` @ 512 (30-step) | 30 | 220 s | 5774.05 | 10.52 | 58.79 |
 | `sdxl-turbo` @ 512 (8-step) | 8 | **69.3 s** | 6085.01 | 10.29 | 61.10 |
 | `zimage` (depth-only) | 8 | 237 s | 7651.40 | 9.29 | 70.31 |
+| `qwen-image` (depth-only) | 50 | 1436 s | 6810.39 | 9.80 | 68.35 |
 | `flux-depth` (FP8) | 30 | 654 s | 3202.12 | 13.08 | 43.63 |
 | **`flux-depth-turbo`** (FP8) | 8 | **166 s** | **2314.24** | **14.49** | **37.05** |
 

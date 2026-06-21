@@ -58,7 +58,6 @@ def main() -> int:
         ("SDXL turbo", "8-step Hyper-SD", "lenna_sdxl_turbo.png"),
         ("Z-Image", "depth-only, 8-step", "lenna_zimage.png"),
         ("Qwen-Image", "depth-only, 50-step", "lenna_qwen_image.png"),
-        ("HunyuanDiT", "d+c, 25-step, 1024", "lenna_hunyuan.png"),
         ("HunyuanDiT full", "d+c, 50-step, 1024", "lenna_hunyuan_full.png"),
         ("SANA", "HED/canny, 20-step, 1024", "lenna_sana_s0.8.png"),
         ("FLUX.2-klein", "img2img, 4-step, 512", "lenna_flux2_klein.png"),

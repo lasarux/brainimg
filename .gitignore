@@ -52,6 +52,14 @@ lenna_sd15_turbo.png
 lenna_sdxl_turbo.png
 lenna_sd15_turbo_comparison.jpg
 lenna_sdxl_turbo_comparison.jpg
+# Full-backend Lenna sweep artifacts (512x512, new scales)
+lenna_sd15_new_scales.png
+lenna_sd15_new_scales_comparison.jpg
+lenna_sdxl_512_new_scales.png
+lenna_sdxl_512_new_scales_comparison.jpg
+lenna_zimage_comparison.jpg
+lenna_flux_depth_comparison.jpg
+lenna_grid.jpg
 
 # OS
 .DS_Store

@@ -334,23 +334,25 @@ Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
 
 | Backend | Steps | Wall time | MSE | PSNR (dB) | MAE |
 |---|---|---|---|---|---|
-| `sd15` (30-step, old defaults 1.5/1.2/0.9) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
-| `sd15-turbo` (old defaults 1.5/1.2/0.9) | 8 | 51.6 s | 7934.50 | 9.14 | 73.59 |
-| `sd15-turbo` (tuned defaults 0.8/1.0/1.0) | 8 | **50.1 s** | **7055.30** | **9.65** | **68.10** |
-| `sdxl` @ 1024 (existing) | 30 | ~17 min | 3943.84 | 12.17 | 51.85 |
-| `sdxl` @ 512 (existing) | 30 | — | 5774.05 | 10.52 | 58.79 |
-| `sdxl-turbo` @ 512 (Hyper-SD) | 8 | **84.2 s** | 6085.01 | 10.29 | 61.10 |
-| `zimage` (depth-only) | 8 | — | 7977.63 | 9.11 | 72.59 |
-| `flux-depth` (depth-only) | 30 | — | 3256.44 | 13.00 | 44.10 |
+| `sd15` (30-step, old scales 1.5/1.2/0.9) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
+| `sd15` (30-step, tuned scales 0.8/1.0/1.0) | 30 | 156 s | 7560.33 | 9.35 | 70.80 |
+| `sd15-turbo` (8-step, tuned scales) | 8 | **50.1 s** | **7055.30** | **9.65** | **68.10** |
+| `sdxl` @ 512 (30-step) | 30 | 220 s | 5774.05 | 10.52 | 58.79 |
+| `sdxl-turbo` @ 512 (8-step) | 8 | **69.3 s** | 6085.01 | 10.29 | 61.10 |
+| `zimage` (depth-only) | 8 | 237 s | 7651.40 | 9.29 | 70.31 |
+| `flux-depth` (FP8) | 30 | 654 s | 3202.12 | 13.08 | 43.63 |
 
-Notes: The scale tuning (depth 1.5 -> 0.8, canny 1.2 -> 1.0, seg 0.9 -> 1.0)
-lifted SD 1.5 turbo from 9.14 dB to 9.65 dB on Lenna — +0.51 dB from scales
-alone, on top of the +0.44 dB the distilled schedule already contributed
-vs the 30-step path. SDXL turbo at 512² is within ~0.23 dB of the 30-step
-SDXL at the same size, at ~12x less wall time; SDXL @ 1024 remains the
-SD-family fidelity leader. FLUX depth has the lowest raw MSE but is
-subject to the SDXL hue-distribution drift caveat on Lenna's pink/magenta
-palette. See `lenna_sd15_turbo_comparison.jpg` for side-by-side.
+Notes: All decodes at 512x512 on the AMD CPU target (188 GB RAM), same
+blueprint + seed 916570520. The scale tuning (depth 1.5 -> 0.8, canny 1.2 ->
+1.0, seg 0.9 -> 1.0) lifted SD 1.5 from 8.70 to 9.35 dB (+0.65 dB) on the
+30-step path and to 9.65 dB (+0.95 dB vs the old baseline) on the 8-step
+turbo path. SDXL turbo at 512² is within ~0.23 dB of the 30-step SDXL at
+the same size, at ~3x less wall time. FLUX depth has the lowest raw MSE
+(13.08 dB) but is subject to the SDXL hue-distribution drift caveat on
+Lenna's pink/magenta palette. Z-Image is depth-only so it ignores the
+canny/seg maps; competitive with SD 1.5 turbo on MSE despite using only
+one conditioning map. See `lenna_grid.jpg` for a combined side-by-side
+grid of all backends, and `lenna_*_comparison.jpg` for individual pairs.
 
 ## Project layout
 

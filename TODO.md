@@ -118,8 +118,8 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       creates a PSNR-vs-color trade-off: a ControlNet scale sweep on Lenna
       at 1024² shows scale=0.5 gives the best PSNR (10.20 dB) but collapses
       the blue/purple band (20% vs source 53%), while scale=1.0 preserves
-      color (54% blue) but gives the worst PSNR (8.69 dB). The default 0.8
-      is a compromise (8.84 dB, 43% blue). SANA is the fastest 1024-native
+      color (54% blue) but gives the worst PSNR (8.69 dB). The default 0.4
+      is the visually best compromise (9.91 dB, 16% blue). SANA is the fastest 1024-native
       backend (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR
       backend due to the HED/canny mismatch. Depth and seg maps are ignored
       (no depth/seg ControlNet exists for SANA). The ControlNet is a

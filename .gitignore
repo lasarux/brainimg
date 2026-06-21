@@ -50,3 +50,7 @@ lenna_flux_canny_comparison.jpg
 
 # OS
 .DS_Store
+# macOS AppleDouble resource-fork junk
+._*
+.___*
+.___*

@@ -51,9 +51,15 @@ def main() -> None:
     # Highlight.
     draw.ellipse([apple_cx - 35, apple_cy - 40, apple_cx - 10, apple_cy - 15], fill=(240, 90, 90))
     # Stem.
-    draw.rectangle([apple_cx - 4, apple_cy - apple_r - 18, apple_cx + 4, apple_cy - apple_r], fill=(80, 50, 20))
+    draw.rectangle(
+        [apple_cx - 4, apple_cy - apple_r - 18, apple_cx + 4, apple_cy - apple_r],
+        fill=(80, 50, 20),
+    )
     # Leaf.
-    draw.ellipse([apple_cx + 4, apple_cy - apple_r - 22, apple_cx + 34, apple_cy - apple_r + 2], fill=(40, 130, 40))
+    draw.ellipse(
+        [apple_cx + 4, apple_cy - apple_r - 22, apple_cx + 34, apple_cy - apple_r + 2],
+        fill=(40, 130, 40),
+    )
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     img.save(OUT, format="JPEG", quality=88)

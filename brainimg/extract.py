@@ -22,7 +22,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .device import free_mlx, free_torch, get_torch_device, get_dtype
+from .device import free_mlx, free_torch, get_dtype, get_torch_device
 from .format import (
     DEFAULT_CAPTION_MODEL,
     DEFAULT_NEGATIVE_PROMPT,
@@ -308,7 +308,6 @@ def _extract_caption_transformers(image_path: str | Path, max_tokens: int = 60) 
 # --------------------------------------------------------------------------- #
 def extract_depth(img: Image.Image) -> str:
     """Return a base64 MAP_SIZExMAP_SIZE JPEG depth map (near=bright, far=dark)."""
-    import torch
     from transformers import pipeline as hf_pipeline
 
     device = get_torch_device()

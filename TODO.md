@@ -32,11 +32,16 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       contributed vs the 30-step path). test512 confirms the same direction
       (lower depth + seg at parity wins across both samples). SDXL defaults
       left unchanged (1.0/0.8/0.6) -- they were already in the good region.
-- [ ] **Brightness clamp edge case.** The `[0.5, 2.0]` gain clamp in
-      `_match_color_statistics` can't reach extreme targets (e.g. darkening
-      210 -> 80 needs ratio 0.38, clamped to 0.5). Consider a per-channel
-      gamma or a wider clamp for out-of-range cases, weighed against clipping
-      artifacts.
+- [x] **Brightness clamp edge case.** The `[0.5, 2.0]` gain clamp in
+      `_match_color_statistics` couldn't reach extreme targets (e.g. darkening
+      210 -> 80 needs ratio 0.38, clamped to 0.5 -> 105, 31% off target).
+      Fixed with a per-channel gamma fallback: when the clamped gain doesn't
+      converge, a gamma curve ``arr^gamma`` (same exponent on every channel,
+      clamped to [0.3, 3.0]) closes the residual gap. Gamma preserves color
+      balance approximately (not exactly like a uniform gain, but far better
+      than clipping) and reaches extreme targets without the posterization a
+      >2x gain would cause. Three new tests in test_color.py cover the gamma
+      darkening, brightening, and approximate ratio preservation paths.
 
 ## Tier 3 — big lift (separate project)
 

@@ -258,6 +258,15 @@ def _match_color_statistics(
 
     Returns the original image unchanged if the targets are 0.0 (older v0.1
     files without stored stats) or the image stats are already within ~2%.
+
+    Brightness clamping: the uniform gain is clamped to [0.5, 2.0] to avoid
+    severe clipping. When the target needs a gain outside that range (e.g.
+    darkening 210 -> 80 needs ratio 0.38, clamped to 0.5 -> 105), a per-channel
+    gamma fallback is applied *after* the clamped gain so the residual gap is
+    closed with a gamma curve instead of a clip. Gamma preserves color balance
+    (same exponent on every channel) and reaches extreme targets without the
+    posterization a >2x gain would cause. The gamma exponent is itself clamped
+    to [0.4, 2.5] -- beyond that, midtones crush or blow out.
     """
     import numpy as np
 
@@ -282,6 +291,8 @@ def _match_color_statistics(
             out = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
 
     # --- brightness last: uniform gain (preserves color balance & saturation) ---
+    # If the clamped gain can't reach the target, follow up with a per-channel
+    # gamma so the residual gap is closed without clipping.
     if target_brightness > 0:
         cur_b, _ = brightness_saturation_of(out)
         if cur_b > 0 and abs(cur_b - target_brightness) > 2.0:
@@ -289,6 +300,19 @@ def _match_color_statistics(
             arr = np.array(out, dtype=np.float32) * gain
             arr = np.clip(arr, 0, 255).astype(np.uint8)
             out = Image.fromarray(arr, "RGB")
+
+            # Gamma fallback if the clamped gain didn't converge.
+            cur_b, _ = brightness_saturation_of(out)
+            if cur_b > 0 and abs(cur_b - target_brightness) > 2.0:
+                # gamma = log(target/255) / log(current/255). gamma > 1 darkens,
+                # gamma < 1 brightens. Clamp to [0.3, 3.0] to avoid severe
+                # midtone crush / blow-out.
+                c = max(cur_b, 1.0) / 255.0
+                t = max(min(target_brightness, 254.0), 1.0) / 255.0
+                gamma = max(0.3, min(3.0, np.log(t) / np.log(c)))
+                arr = np.array(out, dtype=np.float32) / 255.0
+                arr = np.clip(arr, 0, 1) ** gamma
+                out = Image.fromarray((arr * 255.0).astype(np.uint8), "RGB")
 
     return out
 

@@ -67,14 +67,56 @@ def test_match_brightness_moves_toward_target():
     assert abs(b1 - 100.0) <= 3.0  # converged within tolerance
 
 
-def test_match_brightness_respects_lower_clamp():
-    """A target beyond the 0.5 gain clamp gets as close as the clamp allows."""
+def test_match_brightness_reaches_extreme_target_via_gamma():
+    """A target beyond the 0.5 gain clamp is reached via the gamma fallback.
+
+    210 -> 80 needs ratio 0.38, clamped to 0.5 -> 105, then a gamma curve
+    closes the remaining 105 -> 80 gap without clipping. The result should
+    be much closer to 80 than the old clamp-only behavior (~105).
+    """
     bright = _noisy(210, 8)  # brightness ~210
     b0, _ = brightness_saturation_of(bright)
-    # 80/210 = 0.38 -> clamped to 0.5 -> result ~105, not 80.
+    assert b0 > 200
+
     out = _match_color_statistics(bright, target_brightness=80.0, target_saturation=0.0)
     b1, _ = brightness_saturation_of(out)
-    assert b1 == pytest.approx(b0 * 0.5, abs=3.0)  # hit the clamp, not the target
+    # Gamma fallback should land within ~10 of the target (was ~105 with clamp only).
+    assert abs(b1 - 80.0) <= 10.0
+    assert b1 < b0 * 0.6  # clearly past the old 0.5 clamp ceiling of ~105
+
+
+def test_match_brightness_gamma_preserves_color_balance():
+    """The gamma fallback applies the same exponent to every channel.
+
+    Unlike a uniform gain (which preserves channel ratios exactly), gamma is
+    nonlinear so ratios drift slightly -- but the same exponent on every
+    channel keeps hue *approximately* intact (the drift is bounded by the
+    gamma exponent and the channel spread). Verify the ratios stay close.
+    """
+    img = _solid((180, 120, 80))
+    out = _match_color_statistics(img, target_brightness=40.0, target_saturation=0.0)
+    arr = np.array(out, dtype=np.float32)
+    r, g, b = arr[0, 0]
+    # Gamma preserves ratios approximately (within ~20% for a 2.5x gamma on
+    # a moderately saturated color; the test just guards against a per-channel
+    # exponent bug that would diverge wildly).
+    assert abs(r / g - 180 / 120) < 0.4
+    assert abs(g / b - 120 / 80) < 0.4
+
+
+def test_match_brightness_gamma_brightens_extreme_target():
+    """Gamma < 1 brightens a dark image toward an extreme target."""
+    dark = _noisy(40, 8)  # brightness ~40
+    b0, _ = brightness_saturation_of(dark)
+    assert b0 < 50
+
+    out = _match_color_statistics(dark, target_brightness=200.0, target_saturation=0.0)
+    b1, _ = brightness_saturation_of(out)
+    # 200/40 = 5.0 -> clamped to 2.0 -> ~80, then gamma brightens to ~180.
+    # The gamma clamp at 0.3 stops short of the full 200 (ideal gamma 0.21
+    # would crush midtones), but gets well past the old 2.0 gain ceiling.
+    assert abs(b1 - 200.0) <= 25.0
+    assert b1 > b0 * 3.0  # well past the old 2.0 clamp ceiling of ~80
 
 
 def test_match_saturation_moves_toward_target():
@@ -93,9 +135,14 @@ def test_match_saturation_moves_toward_target():
 
 
 def test_match_preserves_color_balance_for_brightness_only():
-    """A uniform brightness gain must keep hue ratios (channel ratios) intact."""
-    img = _solid((100, 60, 40))
-    out = _match_color_statistics(img, target_brightness=200.0, target_saturation=0.0)
+    """A uniform brightness gain must keep hue ratios (channel ratios) intact.
+
+    Uses a target reachable within the [0.5, 2.0] gain clamp so the gamma
+    fallback (which is nonlinear and does NOT preserve ratios) doesn't fire.
+    """
+    img = _solid((100, 60, 40))  # Rec.601 brightness ~69.7
+    # Target 130 needs gain ~1.87 (within [0.5, 2.0]) -> no gamma fallback.
+    out = _match_color_statistics(img, target_brightness=130.0, target_saturation=0.0)
     arr = np.array(out, dtype=np.float32)
     # Each channel scaled by the same gain -> ratios preserved.
     r, g, b = arr[0, 0]

@@ -90,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             "zimage",
             "qwen-image",
             "hunyuan",
+            "hunyuan-full",
             "flux-depth",
             "flux-canny",
             "flux-depth-turbo",
@@ -147,14 +148,15 @@ def main(argv: list[str] | None = None) -> int:
             mode = f"bf16 + cpu-offload{turbo_suffix}"
         else:
             mode = f"bf16 (resident in RAM, ~22 GB){turbo_suffix}"
-    elif args.model == "hunyuan":
+    elif args.model in ("hunyuan", "hunyuan-full"):
         # HunyuanDiT: bf16, depth + canny ControlNets (two separate nets).
+        variant = "distilled (25-step)" if args.model == "hunyuan" else "full (50-step)"
         if device == "cuda":
-            mode = "bf16"
+            mode = f"bf16 {variant}"
         elif device == "mps":
-            mode = "bf16 + cpu-offload"
+            mode = f"bf16 + cpu-offload {variant}"
         else:
-            mode = "bf16 (resident in RAM, ~12 GB)"
+            mode = f"bf16 {variant} (resident in RAM, ~12 GB)"
     elif args.model == "qwen-image":
         # Qwen-Image: bf16, Union ControlNet (depth-only), Qwen text encoder.
         # Same memory strategy as Z-Image.
@@ -195,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     from brainimg.generate import _model_config
 
     if args.model in (
-        "zimage", "qwen-image", "hunyuan", "flux-depth", "flux-canny",
+        "zimage", "qwen-image", "hunyuan", "hunyuan-full", "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
     ):
         # Z-Image + Qwen-Image + FLUX (+ turbo) ignore the file's stored step
@@ -213,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     if (
         device == "cpu"
         and not args.quantize
-        and args.model not in ("zimage", "qwen-image", "hunyuan", "flux-depth", "flux-canny")
+        and args.model not in (
+            "zimage", "qwen-image", "hunyuan", "hunyuan-full", "flux-depth", "flux-canny",
+        )
         and args.model not in ("sd15-turbo", "sdxl-turbo")
         and args.model not in ("flux-depth-turbo", "flux-canny-turbo")
     ):
@@ -234,11 +238,11 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : Qwen-Image on CPU keeps the whole bf16 pipeline in RAM (~20 GB).")
     if args.model == "qwen-image":
         print("  note   : Qwen-Image path uses depth only; canny/seg maps are ignored.")
-    if args.model == "hunyuan" and device != "cuda":
-        print("  note   : HunyuanDiT without CUDA is slow (25 steps distilled on CPU).")
-    if args.model == "hunyuan" and device == "cpu":
+    if args.model in ("hunyuan", "hunyuan-full") and device != "cuda":
+        print(f"  note   : HunyuanDiT without CUDA is slow ({args.model} on CPU).")
+    if args.model in ("hunyuan", "hunyuan-full") and device == "cpu":
         print("  note   : HunyuanDiT on CPU keeps the whole bf16 pipeline in RAM (~12 GB).")
-    if args.model == "hunyuan":
+    if args.model in ("hunyuan", "hunyuan-full"):
         print("  note   : HunyuanDiT uses depth + canny; seg map is ignored (no seg ControlNet).")
     if args.model in (
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",

@@ -232,12 +232,14 @@ QWEN_IMAGE_MAX_TOKENS = 512
 # this path (no seg ControlNet exists for HunyuanDiT) -- no schema change.
 # License: tencent-hunyuan-community.
 HUNYUAN_MODEL_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled"
+HUNYUAN_FULL_MODEL_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers"
 HUNYUAN_CONTROLNET_DEPTH_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Depth"
 HUNYUAN_CONTROLNET_CANNY_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Canny"
 HUNYUAN_CONTROLNET_DEPTH_SCALE = 0.8
 HUNYUAN_CONTROLNET_CANNY_SCALE = 0.8
 HUNYUAN_GUIDANCE_SCALE = 6.0
 HUNYUAN_DEFAULT_STEPS = 25
+HUNYUAN_FULL_DEFAULT_STEPS = 50
 HUNYUAN_MAX_DEFAULT_SIDE = 1024
 
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
@@ -431,6 +433,22 @@ def _model_config(model: str) -> dict:
             "guidance": HUNYUAN_GUIDANCE_SCALE,
             "max_side": HUNYUAN_MAX_DEFAULT_SIDE,
             "default_steps": HUNYUAN_DEFAULT_STEPS,
+            "turbo": False,
+        }
+    if model == "hunyuan-full":
+        # Same as "hunyuan" but with the non-distilled base (50 steps).
+        # Tests whether the distillation is the source of the visual
+        # artifacts on HunyuanDiT.
+        return {
+            "base_id": HUNYUAN_FULL_MODEL_ID,
+            "depth_id": HUNYUAN_CONTROLNET_DEPTH_ID,
+            "canny_id": HUNYUAN_CONTROLNET_CANNY_ID,
+            "depth_scale": HUNYUAN_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": HUNYUAN_CONTROLNET_CANNY_SCALE,
+            "seg_scale": None,
+            "guidance": HUNYUAN_GUIDANCE_SCALE,
+            "max_side": HUNYUAN_MAX_DEFAULT_SIDE,
+            "default_steps": HUNYUAN_FULL_DEFAULT_STEPS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -853,7 +871,7 @@ def _build_qwen_image_pipeline(device: str):
     return pipe, torch
 
 
-def _build_hunyuan_pipeline(device: str):
+def _build_hunyuan_pipeline(device: str, model: str = "hunyuan"):
     """Construct the HunyuanDiT + depth/canny ControlNet pipeline.
 
     Same architectural pattern as SD 1.5/SDXL: two separate ControlNet
@@ -876,7 +894,7 @@ def _build_hunyuan_pipeline(device: str):
         HunyuanDiTControlNetPipeline,
     )
 
-    cfg = _model_config("hunyuan")
+    cfg = _model_config(model)
     load_dtype = torch.bfloat16
 
     controlnets = [
@@ -1089,7 +1107,7 @@ def generate_image(
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
         )
-    if model == "hunyuan":
+    if model in ("hunyuan", "hunyuan-full"):
         return _generate_hunyuan(
             data,
             size=size,
@@ -1098,6 +1116,7 @@ def generate_image(
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
             canny_scale=canny_scale,
+            model=model,
         )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
@@ -1322,14 +1341,16 @@ def _generate_hunyuan(
     guidance_scale: float | None,
     depth_scale: float | None,
     canny_scale: float | None,
+    model: str = "hunyuan",
 ) -> Image.Image:
     """HunyuanDiT path: depth + canny ControlNets (two separate nets).
 
     Same conditioning pattern as SD 1.5/SDXL: depth + canny, no seg (HunyuanDiT
-    has no seg ControlNet). Uses the v1.2 Distilled variant (25 steps).
+    has no seg ControlNet). ``model`` selects the base: "hunyuan" (v1.2
+    Distilled, 25 steps) or "hunyuan-full" (v1.2 non-distilled, 50 steps).
     """
     device = device_override or get_torch_device()
-    cfg = _model_config("hunyuan")
+    cfg = _model_config(model)
 
     target_w, target_h = compute_target_size(
         data.original_width, data.original_height, size, max_side=cfg["max_side"]
@@ -1346,7 +1367,7 @@ def _generate_hunyuan(
         canny_scale if canny_scale is not None else cfg["canny_scale"],
     ]
 
-    pipe, torch = _build_hunyuan_pipeline(device)
+    pipe, torch = _build_hunyuan_pipeline(device, model=model)
 
     # HunyuanDiT uses a BERT tokenizer; the CLIP 77-token limit doesn't apply
     # but we keep the style prefix gating for consistency (BERT can handle

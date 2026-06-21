@@ -69,6 +69,8 @@ lenna_qwen_image_comparison.jpg
 # HunyuanDiT decode artifacts
 lenna_hunyuan.png
 lenna_hunyuan_comparison.jpg
+lenna_hunyuan_full.png
+lenna_hunyuan_cfg9.png
 
 # OS
 .DS_Store

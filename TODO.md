@@ -101,8 +101,15 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       capture. This is a concrete example of the pixel-metric-vs-perceptual
       disconnect flagged in the paper (§4.7). The good MSE likely comes
       from getting overall brightness/layout right at 1024² while producing
-      texture/feature artifacts. Not recommended for visual use; kept for
-      the systems-study comparison.
+      texture/feature artifacts. Tested three variants to isolate the cause:
+      distilled (25 steps, cfg 6.0) = 13.39 dB, full non-distilled (50 steps,
+      cfg 6.0) = 12.33 dB, distilled (25 steps, cfg 9.0) = 12.03 dB. All
+      three collapse the blue/purple band (17-21% vs source's 53%), so the
+      issue is the model itself, not the distillation or parameters. Likely
+      a language mismatch: HunyuanDiT is bilingual with a BERT tokenizer
+      trained primarily on Chinese data; the English caption + Lenna's
+      pink/magenta palette produces inferior results regardless of tuning.
+      Not recommended for visual use; kept for the systems-study comparison.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

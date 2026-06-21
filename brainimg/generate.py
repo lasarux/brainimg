@@ -189,6 +189,18 @@ FLUX_MAX_DEFAULT_SIDE = 1024
 # T5's max sequence length. The T5-XXL encoder takes 256 normally and 512 for
 # the longer prompts; we let it use the full 512.
 FLUX_MAX_TOKENS = 512
+# --- Hyper-SD FLUX turbo ---------------------------------------------------- #
+# ByteDance also ships an 8-step distilled LoRA for FLUX.1-dev:
+# ``Hyper-FLUX.1-dev-8steps-lora.safetensors``. Same fuse scale (0.125), 8
+# steps, guidance_scale 3.5 (the FLUX dev default, not the 10.0/30.0 the
+# non-turbo control variants use). No scheduler swap -- FLUX uses
+# ``FlowMatchEulerDiscreteScheduler`` natively, and the 8-step LoRA just
+# works with fewer steps (unlike SD 1.5/SDXL which need the DDIM trailing
+# schedule). The LoRA loads on top of the existing FluxControlPipeline
+# (channel-concat control is unchanged).
+FLUX_TURBO_LORA_FILE = "Hyper-FLUX.1-dev-8steps-lora.safetensors"
+FLUX_TURBO_DEFAULT_STEPS = 8
+FLUX_TURBO_GUIDANCE_SCALE = 3.5
 
 # --- Hyper-SD turbo distillation stack --------------------------------------- #
 # ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
@@ -416,33 +428,42 @@ def _model_config(model: str) -> dict:
             "turbo_lora_scale": HYPER_SD_LORA_SCALE,
             "default_steps": SD15_TURBO_DEFAULT_STEPS,
         }
-    if model in ("flux-depth", "flux-canny"):
+    if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         # Single-control stack: pick which conditioning map to feed and which
         # base model (Depth vs Canny variant). The two FLUX.1-* Control
         # checkpoints differ in what conditioning they were trained against,
         # so the choice of base is the choice of conditioning type. There
         # is no per-call control scale -- it's baked into the checkpoint
         # (channel-concat conditioning); see FLUX_DEFAULT_STEPS comment.
-        if model == "flux-depth":
+        # Turbo variants add the Hyper-SD FLUX 8-step LoRA on top.
+        is_turbo = model.endswith("-turbo")
+        base_model = model[: -len("-turbo")] if is_turbo else model
+        if base_model == "flux-depth":
             return {
                 "base_id": FLUX_DEPTH_MODEL_ID,
                 "kind": "flux",
                 "control_source": "depth",   # which b64 field on BrainimgData
-                "guidance": FLUX_DEPTH_GUIDANCE_SCALE,
+                "guidance": FLUX_TURBO_GUIDANCE_SCALE if is_turbo else FLUX_DEPTH_GUIDANCE_SCALE,
                 "max_side": FLUX_MAX_DEFAULT_SIDE,
-                "default_steps": FLUX_DEFAULT_STEPS,
+                "default_steps": FLUX_TURBO_DEFAULT_STEPS if is_turbo else FLUX_DEFAULT_STEPS,
                 "max_tokens": FLUX_MAX_TOKENS,
-                "turbo": False,
+                "turbo": is_turbo,
+                "turbo_lora_repo": HYPER_SD_REPO if is_turbo else None,
+                "turbo_lora_file": FLUX_TURBO_LORA_FILE if is_turbo else None,
+                "turbo_lora_scale": HYPER_SD_LORA_SCALE if is_turbo else None,
             }
         return {
             "base_id": FLUX_CANNY_MODEL_ID,
             "kind": "flux",
             "control_source": "canny",
-            "guidance": FLUX_CANNY_GUIDANCE_SCALE,
+            "guidance": FLUX_TURBO_GUIDANCE_SCALE if is_turbo else FLUX_CANNY_GUIDANCE_SCALE,
             "max_side": FLUX_MAX_DEFAULT_SIDE,
-            "default_steps": FLUX_DEFAULT_STEPS,
+            "default_steps": FLUX_TURBO_DEFAULT_STEPS if is_turbo else FLUX_DEFAULT_STEPS,
             "max_tokens": FLUX_MAX_TOKENS,
-            "turbo": False,
+            "turbo": is_turbo,
+            "turbo_lora_repo": HYPER_SD_REPO if is_turbo else None,
+            "turbo_lora_file": FLUX_TURBO_LORA_FILE if is_turbo else None,
+            "turbo_lora_scale": HYPER_SD_LORA_SCALE if is_turbo else None,
         }
     return {
         "base_id": SD15_MODEL_ID,
@@ -788,6 +809,40 @@ def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
             quantize(pipe.text_encoder_2, weights=qfloat8)
             freeze(pipe.text_encoder_2)
 
+    if cfg.get("turbo"):
+        # Hyper-SD FLUX 8-step distilled LoRA. Same fuse scale as the SD
+        # paths (0.125). No scheduler swap -- FLUX uses
+        # FlowMatchEulerDiscreteScheduler natively, and the 8-step LoRA
+        # just works with fewer steps (unlike SD 1.5/SDXL which need the
+        # DDIM trailing schedule). LoRA loads after device placement +
+        # FP8 quant so fuse_lora folds the deltas into the right weights.
+        #
+        # The Hyper-SD FLUX LoRA was trained on the base FLUX.1-dev, not
+        # the Control variants. Two adjustments are needed to load it on
+        # the Control pipeline:
+        #   1. Strip the ``transformer.`` prefix from LoRA keys -- diffusers'
+        #      ``load_lora_weights`` adds it internally when loading from a
+        #      state dict, so the raw LoRA keys must not carry it.
+        #   2. Strip ``x_embedder`` + ``context_embedder`` keys -- the
+        #      Control transformer's patch embedding has extra input
+        #      channels for the control image (128 vs 64) and a
+        #      ``context_embedder`` that base FLUX.1-dev doesn't have, so
+        #      those LoRA deltas are shape-incompatible. The attention/FFN
+        #      LoRA deltas (the bulk of the distillation) load cleanly and
+        #      are what matters for the 8-step schedule.
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
+
+        lora_path = hf_hub_download(cfg["turbo_lora_repo"], cfg["turbo_lora_file"])
+        lora_state = load_file(lora_path, device=str(pipe.device))
+        lora_state = {
+            k.replace("transformer.", "", 1) if k.startswith("transformer.") else k: v
+            for k, v in lora_state.items()
+            if "x_embedder" not in k and "context_embedder" not in k
+        }
+        pipe.load_lora_weights(lora_state)
+        pipe.fuse_lora(lora_scale=cfg["turbo_lora_scale"])
+
     return pipe, torch
 
 
@@ -857,7 +912,7 @@ def generate_image(
             guidance_scale=guidance_scale,
             depth_scale=depth_scale,
         )
-    if model in ("flux-depth", "flux-canny"):
+    if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
             data,
             size=size,

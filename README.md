@@ -336,23 +336,28 @@ Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
 |---|---|---|---|---|---|
 | `sd15` (30-step, old scales 1.5/1.2/0.9) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
 | `sd15` (30-step, tuned scales 0.8/1.0/1.0) | 30 | 156 s | 7560.33 | 9.35 | 70.80 |
-| `sd15-turbo` (8-step, tuned scales) | 8 | **50.1 s** | **7055.30** | **9.65** | **68.10** |
+| `sd15-turbo` (8-step, tuned scales) | 8 | **50.1 s** | 7055.30 | 9.65 | 68.10 |
 | `sdxl` @ 512 (30-step) | 30 | 220 s | 5774.05 | 10.52 | 58.79 |
 | `sdxl-turbo` @ 512 (8-step) | 8 | **69.3 s** | 6085.01 | 10.29 | 61.10 |
 | `zimage` (depth-only) | 8 | 237 s | 7651.40 | 9.29 | 70.31 |
 | `flux-depth` (FP8) | 30 | 654 s | 3202.12 | 13.08 | 43.63 |
+| **`flux-depth-turbo`** (FP8) | 8 | **166 s** | **2314.24** | **14.49** | **37.05** |
 
 Notes: All decodes at 512x512 on the AMD CPU target (188 GB RAM), same
 blueprint + seed 916570520. The scale tuning (depth 1.5 -> 0.8, canny 1.2 ->
 1.0, seg 0.9 -> 1.0) lifted SD 1.5 from 8.70 to 9.35 dB (+0.65 dB) on the
 30-step path and to 9.65 dB (+0.95 dB vs the old baseline) on the 8-step
 turbo path. SDXL turbo at 512² is within ~0.23 dB of the 30-step SDXL at
-the same size, at ~3x less wall time. FLUX depth has the lowest raw MSE
-(13.08 dB) but is subject to the SDXL hue-distribution drift caveat on
-Lenna's pink/magenta palette. Z-Image is depth-only so it ignores the
-canny/seg maps; competitive with SD 1.5 turbo on MSE despite using only
-one conditioning map. See `lenna_grid.jpg` for a combined side-by-side
-grid of all backends, and `lenna_*_comparison.jpg` for individual pairs.
+the same size, at ~3x less wall time. **FLUX depth turbo is the best
+result across all backends**: 14.49 dB at 166 s — the 8-step distilled
+schedule actually beats the 30-step FLUX (13.08 dB) by +1.41 dB at ~4x
+less wall time. The Hyper-SD FLUX LoRA was trained on base FLUX.1-dev, not
+the Control variants; the decoder strips the `x_embedder` /
+`context_embedder` LoRA deltas (shape-incompatible with the Control
+transformer's extra input channels) and keeps the attention/FFN deltas.
+Z-Image is depth-only so it ignores the canny/seg maps; competitive with
+SD 1.5 turbo on MSE despite using only one conditioning map. See
+`lenna_grid.jpg` for a combined side-by-side grid of all backends.
 
 ## Project layout
 

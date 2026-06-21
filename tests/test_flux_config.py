@@ -15,6 +15,10 @@ from brainimg.generate import (
     FLUX_DEPTH_MODEL_ID,
     FLUX_MAX_DEFAULT_SIDE,
     FLUX_MAX_TOKENS,
+    FLUX_TURBO_DEFAULT_STEPS,
+    FLUX_TURBO_GUIDANCE_SCALE,
+    FLUX_TURBO_LORA_FILE,
+    HYPER_SD_REPO,
     _model_config,
 )
 
@@ -115,7 +119,41 @@ def test_all_model_configs_carry_turbo_flag():
     do ``cfg.get("turbo")`` without None ambiguity. The non-turbo / non-SD
     paths must set it to False explicitly.
     """
-    for model in ("sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "flux-depth", "flux-canny"):
+    for model in (
+        "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage",
+        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
+    ):
         cfg = _model_config(model)
         assert "turbo" in cfg, f"{model} config missing turbo key"
         assert isinstance(cfg["turbo"], bool)
+
+
+def test_flux_turbo_reuses_flux_base():
+    """flux-depth-turbo / flux-canny-turbo must reuse the same FLUX.1-*-dev
+    base + control_source as their non-turbo siblings, with turbo=True
+    + the Hyper-SD FLUX LoRA file metadata + 8 steps + guidance 3.5.
+    """
+    for base, turbo in [("flux-depth", "flux-depth-turbo"), ("flux-canny", "flux-canny-turbo")]:
+        base_cfg = _model_config(base)
+        turbo_cfg = _model_config(turbo)
+        assert turbo_cfg["base_id"] == base_cfg["base_id"]
+        assert turbo_cfg["control_source"] == base_cfg["control_source"]
+        assert turbo_cfg["kind"] == "flux"
+        assert turbo_cfg["turbo"] is True
+        assert base_cfg["turbo"] is False
+        assert turbo_cfg["turbo_lora_repo"] == HYPER_SD_REPO
+        assert turbo_cfg["turbo_lora_file"] == FLUX_TURBO_LORA_FILE
+        assert turbo_cfg["turbo_lora_scale"] == 0.125
+        assert turbo_cfg["default_steps"] == FLUX_TURBO_DEFAULT_STEPS == 8
+        assert turbo_cfg["guidance"] == FLUX_TURBO_GUIDANCE_SCALE == 3.5
+
+
+def test_flux_turbo_guidance_differs_from_non_turbo():
+    """FLUX turbo uses guidance 3.5 (the dev default per Hyper-SD card),
+    which is much lower than the non-turbo control defaults (10.0 depth,
+    30.0 canny). The SD turbo paths keep the same guidance as non-turbo;
+    FLUX turbo does not."""
+    assert _model_config("flux-depth-turbo")["guidance"] != _model_config("flux-depth")["guidance"]
+    assert _model_config("flux-canny-turbo")["guidance"] != _model_config("flux-canny")["guidance"]
+    assert _model_config("flux-depth-turbo")["guidance"] == 3.5
+    assert _model_config("flux-canny-turbo")["guidance"] == 3.5

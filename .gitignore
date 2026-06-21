@@ -60,6 +60,9 @@ lenna_sdxl_512_new_scales_comparison.jpg
 lenna_zimage_comparison.jpg
 lenna_flux_depth_comparison.jpg
 lenna_grid.jpg
+# Hyper-SD FLUX turbo artifacts
+lenna_flux_depth_turbo.png
+lenna_flux_depth_turbo_comparison.jpg
 
 # OS
 .DS_Store

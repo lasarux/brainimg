@@ -48,8 +48,11 @@ for the full project description and `TODO.md` for planned decode-quality work.
   `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
   `sd15-turbo` / `sdxl-turbo` (same base + ControlNets + ByteDance Hyper-SD
   8-step distilled LoRA, DDIM trailing schedule), `zimage` (Z-Image-Turbo 6B
-  DiT + single Union ControlNet, depth-only), and `flux-depth` / `flux-canny`
-  (FLUX.1 Control variants, channel-concat, one conditioning image).
+  DiT + single Union ControlNet, depth-only), `flux-depth` / `flux-canny`
+  (FLUX.1 Control variants, channel-concat, one conditioning image), and
+  `flux-depth-turbo` / `flux-canny-turbo` (FLUX Control + Hyper-SD 8-step
+  FLUX LoRA, strips x_embedder/context_embedder deltas that are
+  shape-incompatible with the Control transformer).
   The zimage path lives in `_generate_zimage` / `_build_zimage_pipeline`,
   the FLUX path in `_generate_flux` / `_build_flux_pipeline`, and the
   SD path (which also serves `*-turbo` via a `cfg["turbo"]` flag) in
@@ -97,6 +100,17 @@ for the full project description and `TODO.md` for planned decode-quality work.
   The LoRA must be fused *after* device placement. Turbo paths ignore the file's
   stored step count (tuned for 20-30 step SD) and use 8 steps unless `--steps` is
   passed. The `--cfg` default stays at 7.0/7.5 (CFG-preserved LoRAs support 5-8).
+- **Hyper-SD FLUX turbo LoRA loading**: `flux-depth-turbo` / `flux-canny-turbo`
+  load the `Hyper-FLUX.1-dev-8steps-lora.safetensors` LoRA inside
+  `_build_flux_pipeline`. The LoRA was trained on base `FLUX.1-dev`, not the
+  Control variants -- the Control transformer's `x_embedder` (extra input
+  channels for the control image, 128 vs 64) and `context_embedder` (doesn't
+  exist on base dev) are shape-incompatible, so those LoRA deltas are stripped
+  before loading. The `transformer.` prefix is also stripped (diffusers adds
+  it internally when loading from a state dict). No scheduler swap -- FLUX
+  uses `FlowMatchEulerDiscreteScheduler` natively and the 8-step LoRA just
+  works with fewer steps. Guidance 3.5 (the FLUX dev default, not the 10.0/
+  30.0 the non-turbo control variants use).
 - **Z-Image ControlNet file choice**: the *lite* 2.1-2601/2602-8steps
   safetensors look attractive (~2 GB) but their widened `control_all_x_embedder`
   (input dim 132 vs diffusers' expected 64) is rejected by

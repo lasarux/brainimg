@@ -90,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
             "zimage",
             "flux-depth",
             "flux-canny",
+            "flux-depth-turbo",
+            "flux-canny-turbo",
         ],
         default="sd15",
         help="base diffusion model: 'sd15' (default, ~3.5 GB, 512) or 'sdxl' "
@@ -105,7 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         "resident; pass --quantize for FP8 ~12 GB) and feeds the blueprint's "
         "depth map; 'flux-canny' is the same but with FLUX.1-Canny-dev + "
         "the canny map. Both ignore the other map and any seg map "
-        "(channel-concat control, one image).",
+        "(channel-concat control, one image). 'flux-depth-turbo' / "
+        "'flux-canny-turbo' add Hyper-SD's 8-step FLUX LoRA on top of the "
+        "same control pipeline -- drops FLUX from 30 to 8 steps, guidance "
+        "3.5 (the dev default). ~4-5x faster on CPU.",
     )
     args = parser.parse_args(argv)
 
@@ -121,16 +126,18 @@ def main(argv: list[str] | None = None) -> int:
         else (get_torch_device() if args.device == "auto" else args.device)
     )
 
-    if args.model in ("flux-depth", "flux-canny"):
+    if args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         # FLUX is bf16; --quantize FP8's the transformer + T5 (the big two).
+        # Turbo variants add the Hyper-SD FLUX 8-step LoRA on top.
+        turbo_suffix = " + Hyper-SD 8-step LoRA" if args.model.endswith("-turbo") else ""
         if args.quantize:
-            mode = "bf16 + FP8 weights (transformer + T5)"
+            mode = f"bf16 + FP8 weights (transformer + T5){turbo_suffix}"
         elif device == "cuda":
-            mode = "bf16"
+            mode = f"bf16{turbo_suffix}"
         elif device == "mps":
-            mode = "bf16 + cpu-offload"
+            mode = f"bf16 + cpu-offload{turbo_suffix}"
         else:
-            mode = "bf16 (resident in RAM, ~22 GB)"
+            mode = f"bf16 (resident in RAM, ~22 GB){turbo_suffix}"
     elif args.model == "zimage":
         # bf16 throughout. cuda: resident. mps: layers stream host<->device.
         # cpu: whole pipeline resident in host RAM (no offload -- diffusers'
@@ -161,9 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  seed   : {data.seed}")
     from brainimg.generate import _model_config
 
-    if args.model in ("zimage", "flux-depth", "flux-canny"):
-        # Z-Image + FLUX ignore the file's stored step count (tuned for SD 1.5);
-        # show the effective step count they actually use.
+    if args.model in (
+        "zimage", "flux-depth", "flux-canny",
+        "flux-depth-turbo", "flux-canny-turbo",
+    ):
+        # Z-Image + FLUX (+ turbo) ignore the file's stored step count (tuned
+        # for SD 1.5); show the effective step count they actually use.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
     elif args.model in ("sd15-turbo", "sdxl-turbo"):
@@ -179,30 +189,44 @@ def main(argv: list[str] | None = None) -> int:
         and not args.quantize
         and args.model not in ("zimage", "flux-depth", "flux-canny")
         and args.model not in ("sd15-turbo", "sdxl-turbo")
+        and args.model not in ("flux-depth-turbo", "flux-canny-turbo")
     ):
         print("  note   : CPU fp32 is slow (minutes/image). Add --quantize for less memory.")
     if args.model in ("sd15-turbo", "sdxl-turbo"):
         print("  note   : Hyper-SD 8-step distilled LoRA; --cfg defaults to 7.0/7.5.")
+    if args.model in ("flux-depth-turbo", "flux-canny-turbo"):
+        print("  note   : Hyper-SD FLUX 8-step LoRA; --cfg defaults to 3.5 (dev default).")
     if args.model == "zimage" and device != "cuda":
         print("  note   : Z-Image without CUDA is slow. Prefer --device cuda for 8-step speed.")
     if args.model == "zimage" and device == "cpu":
         print("  note   : Z-Image on CPU keeps the whole bf16 pipeline in RAM (~18 GB).")
     if args.model == "zimage":
         print("  note   : Z-Image path uses depth only; canny/seg maps are ignored.")
-    if args.model in ("flux-depth", "flux-canny"):
-        other = "canny" if args.model == "flux-depth" else "depth"
+    if args.model in (
+        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
+    ):
+        is_turbo = args.model.endswith("-turbo")
+        base = args.model[: -len("-turbo")] if is_turbo else args.model
+        other = "canny" if base == "flux-depth" else "depth"
+        cond = "depth" if base == "flux-depth" else "canny"
         print(
-            f"  note   : FLUX is bf16; {args.model} uses only its "
-            f"{'depth' if args.model == 'flux-depth' else 'canny'} map "
+            f"  note   : FLUX is bf16; {base} uses only its {cond} map "
             f"({other}/seg maps ignored). Add --quantize on CPU to drop RAM "
             f"from ~22 GB to ~12 GB via FP8 (transformer + T5)."
         )
-    if args.model in ("flux-depth", "flux-canny") and device == "cpu" and not args.quantize:
+    if (
+        args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo")
+        and device == "cpu"
+        and not args.quantize
+    ):
         print(
             "  note   : FLUX on CPU without --quantize keeps the full bf16 pipeline "
             "in RAM (~22 GB)."
         )
-    if args.model in ("flux-depth", "flux-canny") and device == "mps":
+    if (
+        args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo")
+        and device == "mps"
+    ):
         print(
             "  note   : FLUX on MPS streams layers host<->device; "
             "8 GB Apple Silicon not supported (use --model sd15)."

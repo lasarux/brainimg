@@ -55,11 +55,23 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       `--steps` is passed; `--cfg` defaults stay at 7.5/7.0 (CFG-preserved
       LoRAs support 5-8). `peft>=0.10` is required for LoRA loading.
       Measured on the AMD CPU target with `samples/lenna.tiff` (512²,
-      same seed): SD 1.5 turbo 51.6 s vs ~3 min for the 30-step path
-      (+0.44 dB PSNR -- distilled schedule wins on this image), SDXL turbo
-      84.2 s at 512² vs ~17 min for the 30-step path at 512² (~12x faster
-      at −0.23 dB). The biggest win on the AMD CPU target where every
-      step costs the same wall time.
+      same seed): SD 1.5 turbo 50.1 s / 9.65 dB PSNR vs ~3 min / 8.70 dB
+      for the 30-step path with old defaults (+0.95 dB — distilled schedule
+      + tuned scales both help), SDXL turbo 84.2 s at 512² vs ~17 min
+      for the 30-step path at 512² (~12x faster at −0.23 dB). The biggest
+      win on the AMD CPU target where every step costs the same wall time.
+- [x] **Hyper-SD FLUX turbo backends.** `--model flux-depth-turbo` /
+      `flux-canny-turbo` add Hyper-SD's `Hyper-FLUX.1-dev-8steps-lora.safetensors`
+      8-step distilled LoRA on top of the existing FLUX.1 Control pipeline.
+      No scheduler swap (FLUX uses `FlowMatchEulerDiscreteScheduler` natively);
+      guidance 3.5 (the dev default, not 10.0/30.0). The LoRA was trained on
+      base `FLUX.1-dev`, not the Control variants -- the `x_embedder`
+      (extra input channels, 128 vs 64) and `context_embedder` (doesn't exist
+      on base dev) LoRA deltas are shape-incompatible and stripped before
+      loading; the `transformer.` prefix is also stripped (diffusers adds it
+      internally). Measured on Lenna 512² FP8: 165.8 s / 14.49 dB PSNR vs
+      654 s / 13.08 dB for the 30-step path -- the 8-step distilled schedule
+      actually **beats** the 30-step FLUX by +1.41 dB at ~4x less wall time.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

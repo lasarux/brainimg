@@ -183,6 +183,34 @@ FLUX_MAX_DEFAULT_SIDE = 1024
 # the longer prompts; we let it use the full 512.
 FLUX_MAX_TOKENS = 512
 
+# --- Hyper-SD turbo distillation stack --------------------------------------- #
+# ByteDance's Hyper-SD (arXiv 2404.13686) distilled the SD 1.5 and SDXL base
+# models down to 1-8 steps via trajectory-segmented consistency distillation,
+# shipping them as small (~70-150 MB) LoRAs that work with the stock ControlNets
+# we already load. Two scheduler families are paired with the LoRAs:
+#   * ``DDIMScheduler.from_config(..., timestep_spacing="trailing")`` for the
+#     2/4/8-step CFG LoRAs (guidance_scale 0 -- CFG is folded in by distillation).
+#   * ``TCDScheduler`` for the 1-step unified LoRA (guidance_scale 0, ``eta``
+#     tunes detail vs. cleanliness; higher eta -> more detail, see model card).
+#
+# We pin the 8-step CFG-preserved LoRAs as the default -- the card recommends
+# them as the standard config (good quality/speed trade-off, supports the same
+# 5-8 guidance scales the user might want via --cfg). 1/2/4-step LoRAs exist on
+# the same repo (``Hyper-SD15-1step-lora.safetensors`` etc.) and can be wired
+# in by lowering ``*_TURBO_DEFAULT_STEPS`` + swapping the file name.
+HYPER_SD_REPO = "ByteDance/Hyper-SD"
+SD15_TURBO_LORA_FILE = "Hyper-SD15-8steps-CFG-lora.safetensors"
+SDXL_TURBO_LORA_FILE = "Hyper-SDXL-8steps-CFG-lora.safetensors"
+# LoRA scale per the model card (0.125 is the recommended fuse scale for both
+# SD 1.5 and SDXL; larger scales over-apply the distillation and hurt quality).
+HYPER_SD_LORA_SCALE = 0.125
+# 8-step CFG-preserved LoRAs support guidance 5-8 per the card; default matches
+# the non-turbo SDXL default of 7.0 (SD 1.5 turbo defaults to 7.5 like the base).
+SD15_TURBO_GUIDANCE_SCALE = SD15_GUIDANCE_SCALE
+SDXL_TURBO_GUIDANCE_SCALE = SDXL_GUIDANCE_SCALE
+SD15_TURBO_DEFAULT_STEPS = 8
+SDXL_TURBO_DEFAULT_STEPS = 8
+
 # Backwards-compat single-name constants (callers below use the helpers).
 SD_MODEL_ID = SD15_MODEL_ID
 VAE_MODEL_ID = SD15_VAE_ID
@@ -288,6 +316,7 @@ def _model_config(model: str) -> dict:
             "max_side": ZIMAGE_MAX_DEFAULT_SIDE,
             "default_steps": ZIMAGE_DEFAULT_STEPS,
             "max_tokens": ZIMAGE_MAX_TOKENS,
+            "turbo": False,
         }
     if model == "sdxl":
         return {
@@ -306,7 +335,56 @@ def _model_config(model: str) -> dict:
         # abovzv's seg net uses a non-standard weight filename; diffusers
         # auto-looks for diffusion_pytorch_model.safetensors, so name it.
         "seg_weight_name": "sdxl_segmentation_ade20k_controlnet.safetensors",
+        "turbo": False,
     }
+    if model == "sdxl-turbo":
+        # Hyper-SD XL distilled stack: same SDXL base + VAE + ControlNets as
+        # "sdxl", plus a tiny LoRA loaded in _build_pipeline that drops generation
+        # to 8 steps. guidance 7.0 (CFG-preserved LoRA), DDIM trailing schedule.
+        return {
+            "base_id": SDXL_MODEL_ID,
+            "vae_id": SDXL_VAE_ID,
+            "depth_id": SDXL_CONTROLNET_DEPTH_ID,
+            "canny_id": SDXL_CONTROLNET_CANNY_ID,
+            "seg_id": SDXL_CONTROLNET_SEG_ID,
+            "depth_scale": SDXL_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": SDXL_CONTROLNET_CANNY_SCALE,
+            "seg_scale": SDXL_CONTROLNET_SEG_SCALE,
+            "guidance": SDXL_TURBO_GUIDANCE_SCALE,
+            "max_side": SDXL_MAX_DEFAULT_SIDE,
+            "vae_fp16_variant": None,
+            "seg_fp16_variant": None,
+            "seg_weight_name": "sdxl_segmentation_ade20k_controlnet.safetensors",
+            "turbo": True,
+            "turbo_lora_repo": HYPER_SD_REPO,
+            "turbo_lora_file": SDXL_TURBO_LORA_FILE,
+            "turbo_lora_scale": HYPER_SD_LORA_SCALE,
+            "default_steps": SDXL_TURBO_DEFAULT_STEPS,
+        }
+    if model == "sd15-turbo":
+        # Hyper-SD 1.5 distilled stack: SD 1.5 base + sd-vae-ft-mse + the
+        # existing depth/canny/seg ControlNets, plus the 8-step CFG-preserved
+        # LoRA. Same defaults as "sd15" except for steps + the turbo flag.
+        return {
+            "base_id": SD15_MODEL_ID,
+            "vae_id": SD15_VAE_ID,
+            "depth_id": SD15_CONTROLNET_DEPTH_ID,
+            "canny_id": SD15_CONTROLNET_CANNY_ID,
+            "seg_id": SD15_CONTROLNET_SEG_ID,
+            "depth_scale": SD15_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": SD15_CONTROLNET_CANNY_SCALE,
+            "seg_scale": SD15_CONTROLNET_SEG_SCALE,
+            "guidance": SD15_TURBO_GUIDANCE_SCALE,
+            "max_side": SD15_MAX_DEFAULT_SIDE,
+            "vae_fp16_variant": None,
+            "seg_fp16_variant": "fp16",
+            "seg_weight_name": None,
+            "turbo": True,
+            "turbo_lora_repo": HYPER_SD_REPO,
+            "turbo_lora_file": SD15_TURBO_LORA_FILE,
+            "turbo_lora_scale": HYPER_SD_LORA_SCALE,
+            "default_steps": SD15_TURBO_DEFAULT_STEPS,
+        }
     if model in ("flux-depth", "flux-canny"):
         # Single-control stack: pick which conditioning map to feed and which
         # base model (Depth vs Canny variant). The two FLUX.1-* Control
@@ -323,6 +401,7 @@ def _model_config(model: str) -> dict:
                 "max_side": FLUX_MAX_DEFAULT_SIDE,
                 "default_steps": FLUX_DEFAULT_STEPS,
                 "max_tokens": FLUX_MAX_TOKENS,
+                "turbo": False,
             }
         return {
             "base_id": FLUX_CANNY_MODEL_ID,
@@ -332,6 +411,7 @@ def _model_config(model: str) -> dict:
             "max_side": FLUX_MAX_DEFAULT_SIDE,
             "default_steps": FLUX_DEFAULT_STEPS,
             "max_tokens": FLUX_MAX_TOKENS,
+            "turbo": False,
         }
     return {
         "base_id": SD15_MODEL_ID,
@@ -347,6 +427,7 @@ def _model_config(model: str) -> dict:
         "vae_fp16_variant": None,
         "seg_fp16_variant": "fp16",
         "seg_weight_name": None,
+        "turbo": False,
     }
 
 
@@ -421,9 +502,10 @@ def _build_pipeline(
     )
 
     cfg = _model_config(model)
-    if model == "sdxl":
+    if model in ("sdxl", "sdxl-turbo"):
         pipe_cls = StableDiffusionXLControlNetPipeline
     else:
+        # sd15 + sd15-turbo share the SD 1.5 pipeline class.
         pipe_cls = StableDiffusionControlNetPipeline
 
     # Always load from the fp16 checkpoint (smaller download) and upcast
@@ -480,7 +562,27 @@ def _build_pipeline(
 
     pipe = pipe.to(device)
 
-    pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+    if cfg.get("turbo"):
+        # Hyper-SD distilled LoRA: load + fuse before inference so the
+        # UNet weights are permanently adjusted (no per-call LoRA overhead).
+        # Per ByteDance's model card: fuse scale 0.125 for both SD 1.5 and
+        # SDXL distilled LoRAs, then swap the scheduler to DDIM with trailing
+        # timestep spacing -- the distilled schedule uses a different timestep
+        # progression than the stock UniPC scheduler.
+        from huggingface_hub import hf_hub_download
+
+        lora_path = hf_hub_download(cfg["turbo_lora_repo"], cfg["turbo_lora_file"])
+        # diffusers' load_lora_weights accepts a path to a safetensors file.
+        pipe.load_lora_weights(lora_path)
+        pipe.fuse_lora(lora_scale=cfg["turbo_lora_scale"])
+        # SD 1.5 + SDXL distilled stacks both use the DDIM trailing schedule.
+        from diffusers import DDIMScheduler
+
+        pipe.scheduler = DDIMScheduler.from_config(
+            pipe.scheduler.config, timestep_spacing="trailing"
+        )
+    else:
+        pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
 
     try:
         pipe.enable_attention_slicing()
@@ -770,7 +872,13 @@ def _generate_sd(
     target_w, target_h = compute_target_size(
         data.original_width, data.original_height, size, max_side=cfg["max_side"]
     )
-    n_steps = steps or data.steps
+    # Turbo models ignore the file's stored step count (tuned for the 20-30
+    # step SD schedule); they use the distilled LoRA's step count (8) unless
+    # the user passes --steps explicitly. Non-turbo SD 1.5/SDXL honor data.steps.
+    if cfg.get("turbo"):
+        n_steps = steps or cfg["default_steps"]
+    else:
+        n_steps = steps or data.steps
 
     has_seg = bool(getattr(data, "segmentation_map_b64", ""))
     conditioning = _load_conditioning_maps(data, target_w, target_h)

@@ -82,18 +82,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model",
-        choices=["sd15", "sdxl", "zimage", "flux-depth", "flux-canny"],
+        choices=[
+            "sd15",
+            "sd15-turbo",
+            "sdxl",
+            "sdxl-turbo",
+            "zimage",
+            "flux-depth",
+            "flux-canny",
+        ],
         default="sd15",
         help="base diffusion model: 'sd15' (default, ~3.5 GB, 512) or 'sdxl' "
         "(~7 GB base + 3 ControlNets, 1024, ~5-10x slower on CPU). The seg "
-        "ControlNet is supported on both. 'zimage' uses Tongyi-MAI/Z-Image-Turbo "
-        "(6B bf16 DiT) + the alibaba-pai Union ControlNet (depth-only; canny "
-        "and seg from the blueprint are ignored). Needs ~16 GB VRAM; 8 GB "
-        "Apple Silicon should use 'sd15'. 8 steps, fast on CUDA. "
-        "'flux-depth' uses FLUX.1-Depth-dev (~22 GB resident; pass --quantize "
-        "for FP8 ~12 GB) and feeds the blueprint's depth map; 'flux-canny' is "
-        "the same but with FLUX.1-Canny-dev + the canny map. Both ignore the "
-        "other map and any seg map (channel-concat control, one image).",
+        "ControlNet is supported on both. 'sd15-turbo' / 'sdxl-turbo' add "
+        "ByteDance's Hyper-SD 8-step distilled LoRA on top of the same base "
+        "+ ControlNets -- ~4x faster on CPU at a small quality cost (8 steps "
+        "instead of 20-30, guidance scale 7.0/7.5). 'zimage' uses "
+        "Tongyi-MAI/Z-Image-Turbo (6B bf16 DiT) + the alibaba-pai Union "
+        "ControlNet (depth-only; canny and seg from the blueprint are "
+        "ignored). Needs ~16 GB VRAM; 8 GB Apple Silicon should use 'sd15'. "
+        "8 steps, fast on CUDA. 'flux-depth' uses FLUX.1-Depth-dev (~22 GB "
+        "resident; pass --quantize for FP8 ~12 GB) and feeds the blueprint's "
+        "depth map; 'flux-canny' is the same but with FLUX.1-Canny-dev + "
+        "the canny map. Both ignore the other map and any seg map "
+        "(channel-concat control, one image).",
     )
     args = parser.parse_args(argv)
 
@@ -129,6 +141,15 @@ def main(argv: list[str] | None = None) -> int:
             mode = "bf16 + cpu-offload"
         else:
             mode = "bf16 (resident in RAM, ~18 GB)"
+    elif args.model in ("sd15-turbo", "sdxl-turbo"):
+        # Turbo LoRAs ride on the SD 1.5 / SDXL base + same ControlNets; the
+        # mode string mirrors the non-turbo path but flags the distillation.
+        if device == "cpu":
+            mode = "fp32 + Hyper-SD 8-step LoRA"
+        elif device == "mps":
+            mode = "int8 weights + activations + Hyper-SD 8-step LoRA"
+        else:
+            mode = "fp16 + Hyper-SD 8-step LoRA"
     elif device == "cpu":
         mode = "int8 weights" if args.quantize else "fp32 (no quantization)"
     elif device == "mps":
@@ -145,14 +166,23 @@ def main(argv: list[str] | None = None) -> int:
         # show the effective step count they actually use.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
+    elif args.model in ("sd15-turbo", "sdxl-turbo"):
+        # Turbo stacks ignore the file's stored step count (tuned for the
+        # 20-30 step SD schedule) and use the distilled LoRA's 8 steps unless
+        # the user passes --steps explicitly.
+        eff_steps = args.steps or _model_config(args.model)["default_steps"]
+        print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
     else:
         print(f"  steps  : {args.steps or data.steps}")
     if (
         device == "cpu"
         and not args.quantize
         and args.model not in ("zimage", "flux-depth", "flux-canny")
+        and args.model not in ("sd15-turbo", "sdxl-turbo")
     ):
         print("  note   : CPU fp32 is slow (minutes/image). Add --quantize for less memory.")
+    if args.model in ("sd15-turbo", "sdxl-turbo"):
+        print("  note   : Hyper-SD 8-step distilled LoRA; --cfg defaults to 7.0/7.5.")
     if args.model == "zimage" and device != "cuda":
         print("  note   : Z-Image without CUDA is slow. Prefer --device cuda for 8-step speed.")
     if args.model == "zimage" and device == "cpu":

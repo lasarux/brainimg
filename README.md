@@ -18,6 +18,7 @@ resolution.
 | Canny edges (encoder) | OpenCV | — |
 | Segmentation (encoder) | PyTorch (OneFormer ADE20K) | `shi-labs/oneformer_ade20k_swin_tiny` |
 | Image generation (decoder) | PyTorch + MPS | `stable-diffusion-v1-5/stable-diffusion-v1-5` + `lllyasviel/control_v11f1p_sd15_depth` + `lllyasviel/control_v11p_sd15_canny` (+ `lllyasviel/control_v11p_sd15_seg` when the blueprint has a seg map) |
+| Image generation (decoder, `--model sd15-turbo` / `sdxl-turbo`) | PyTorch | same SD 1.5 / SDXL base + ControlNets + ByteDance **Hyper-SD** 8-step distilled LoRA (`ByteDance/Hyper-SD`) |
 | Image generation (decoder, `--model zimage`) | PyTorch + bf16 | `Tongyi-MAI/Z-Image-Turbo` (6B DiT) + `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` (8-step distill) |
 | Image generation (decoder, `--model flux-depth` / `--model flux-canny`) | PyTorch + bf16 (+ optional FP8) | `black-forest-labs/FLUX.1-Depth-dev` / `FLUX.1-Canny-dev` (12B MMDiT + T5-XXL; one conditioning image, channel-concat) |
 
@@ -68,6 +69,35 @@ python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu --qu
 
 # CPU without --quantize: ~22 GB RAM resident (won't fit most dev boxes)
 python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu
+```
+
+### `--model sd15-turbo` / `--model sdxl-turbo`: Hyper-SD distilled backends
+
+ByteDance's **Hyper-SD** (arXiv 2404.13686) trajectory-segmented consistency
+distillation ships small (~70-150 MB) LoRAs that fold the SD 1.5 / SDXL base
+models down to **8 inference steps** while keeping the stock ControlNets in
+play. Same base + VAE + depth/canny/seg ControlNets as `sd15` / `sdxl`; the
+LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
+`DDIMScheduler(timestep_spacing="trailing")` per the model card.
+
+- **8 steps** (vs 20-30 for the non-turbo paths) — the main win on a CPU-only
+  box, where each step costs the same wall time. Roughly **4x faster** than
+  the non-turbo SDXL path at 1024 on the same hardware.
+- **guidance_scale 7.0/7.5** (CFG-preserved LoRA; supports 5-8 if you tune
+  `--cfg`). The 1/2/4-step LoRAs on the same repo want `--cfg 0`; not wired
+  up by default.
+- **Same fidelity maps** as `sd15` / `sdxl` — depth + canny + optional seg.
+  No schema change; the blueprint is identical.
+- Small quality cost vs the 30-step non-turbo path (distillation trades a
+  little detail for the speedup); use `sd15` / `sdxl` when fidelity matters
+  most and wall time is not the bottleneck.
+
+```bash
+# CPU-only with lots of RAM (the brainimg target): 8-step SDXL @ 1024
+python decoder.py out.brainimg -o recon.png --model sdxl-turbo --device cpu
+
+# CPU-only SD 1.5 turbo @ 512
+python decoder.py out.brainimg -o recon.png --model sd15-turbo --device cpu
 ```
 
 ### `--model zimage`: Z-Image-Turbo backend
@@ -140,9 +170,11 @@ fp32 for a clean final decode. This is the Apple Silicon equivalent of the
 
 ## Install
 
-Requires Python 3.12 and [`uv`](https://github.com/astral-sh/uv). Runs on
-Apple Silicon (MLX for captioning) or any x86/x64 CPU / NVIDIA CUDA machine
-(transformers Qwen2.5-VL-7B fallback for captioning).
+Requires Python 3.12 and [`uv`](https://github.com/astral-sh/uv). The current
+target is an **x86/x64 CPU box with abundant RAM** (the dev machine is an AMD
+CPU-only system with 188 GB RAM); the decoder runs full fp32 SD 1.5 / SDXL /
+Z-Image / FLUX without quantization. Apple Silicon (MLX captioning + MPS
+int8 decoder) and NVIDIA CUDA (fp16) still work but are no longer the focus.
 
 ```bash
 uv venv -p 3.12
@@ -152,11 +184,11 @@ uv pip install -r requirements.txt
 
 > On a non-Apple platform, uninstall the non-functional `mlx`/`mlx-vlm` stub
 > wheels (they ship without `libmlx.so`): `pip uninstall -y mlx mlx-vlm mlx-lm`.
+> Captioning then falls back to the transformers Qwen2.5-VL-7B model.
 
 The first run downloads the models to `~/.cache/huggingface` (captioner ~15 GB
-for the 7B on non-Apple, ~2 GB for the MLX 4-bit on Apple; depth + seg ~1 GB;
-decoder ~3.5 GB). Close memory-hungry apps (browsers, etc.) before decoding on
-an 8 GB machine.
+for the 7B on CPU; depth + seg ~1 GB; decoder ~3.5 GB SD 1.5 / ~7 GB SDXL /
+~18 GB Z-Image / ~22 GB FLUX).
 
 ## Usage
 
@@ -167,8 +199,12 @@ python encoder.py samples/real.jpg -o out.brainimg
 # Decode: blueprint -> regenerated image
 python decoder.py out.brainimg -o recon.png
 
-# CPU mode: full fp32, best fidelity (needs ~10 GB RAM, slow)
+# CPU mode: full fp32, best fidelity (the AMD CPU target; needs ~10 GB RAM, slow)
 python decoder.py out.brainimg -o recon.png --device cpu
+
+# CPU + Hyper-SD 8-step turbo: ~4x faster, small quality cost
+python decoder.py out.brainimg -o recon.png --device cpu --model sd15-turbo
+python decoder.py out.brainimg -o recon.png --device cpu --model sdxl-turbo --size 1024x1024
 
 # CPU + int8 weights: fits in ~5 GB RAM, small quality cost
 python decoder.py out.brainimg -o recon.png --device cpu --quantize
@@ -190,22 +226,28 @@ same image **exactly** (verified: 0 pixel difference between runs).
 
 ### Device modes
 
-| `--device` | Precision | RAM needed | Speed | Fidelity |
+The dev target is an AMD x86_64 CPU-only box with 188 GB RAM, so the CPU fp32
+columns are the primary path. Apple Silicon (MPS int8) and NVIDIA (CUDA fp16)
+remain supported but are secondary.
+
+| `--device` + `--model` | Precision | RAM needed | Speed | Fidelity |
 |---|---|---|---|---|
-| `auto` (default) | detects best available | varies | varies | varies |
-| `cpu` | fp32 (no quantization) | ~10 GB | slow (min/image) | **best** (sd15/sdxl) |
-| `cpu --quantize` | int8 weights, fp32 activations | ~5 GB | slow | good |
+| `cpu` (default target) | fp32 (no quantization) | ~10 GB SD 1.5 / ~17 GB SDXL | slow (min/image, SDXL @ 1024) | **best** (sd15/sdxl) |
+| `cpu --quantize` | int8 weights, fp32 activations | ~5 GB / ~9 GB | slow | good |
+| `cpu --model sd15-turbo` | fp32 + Hyper-SD 8-step LoRA | ~10 GB | **~4x faster** than sd15 | good |
+| `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **~4x faster** than sdxl @ 1024 | good |
+| `cpu --model zimage` | bf16 (resident in RAM) | ~18 GB | very slow (8 steps, but big DiT) | good (depth-only) |
+| `cpu --model flux-depth --quantize` | bf16 + FP8 (RAM) | ~12 GB | very slow (30 steps) | good (depth-only) |
+| `cpu --model flux-depth` | bf16 (resident in RAM) | ~22 GB | very slow (30 steps) | good (depth-only) |
 | `mps` | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
 | `cuda` | fp16 | ~5 GB | **fast** | good |
 | `--model zimage --device cuda` | bf16 | ~18 GB | **fast** (8 steps) | good (depth-only) |
-| `--model zimage --device mps` | bf16 + cpu-offload | varies | slow | good (depth-only) |
-| `--model zimage --device cpu` | bf16 (resident) | ~18 GB RAM | very slow | good (depth-only) |
 | `--model flux-depth --device cuda` | bf16 | ~22 GB | medium (30 steps) | good (depth-only) |
 | `--model flux-depth --device cuda --quantize` | bf16 + FP8 weights | ~12 GB | medium | good (depth-only) |
-| `--model flux-depth --device cpu --quantize` | bf16 + FP8 (RAM) | ~12 GB | very slow | good (depth-only) |
-| `--model flux-depth --device cpu` | bf16 (resident in RAM) | ~22 GB RAM | very slow | good (depth-only) |
 
 Use `--device cpu` on a high-RAM machine for the best reconstruction quality.
+Add `--model sd15-turbo` / `sdxl-turbo` when wall time matters more than the
+last few percent of fidelity.
 
 ## `.brainimg` file
 
@@ -240,9 +282,11 @@ pytest                       # format tests, no models needed
 - **Quality depends on device**: `--device cpu` (full fp32) gives the best
   reconstruction. On 8 GB Apple Silicon (`--device mps`), int8 quantization is
   required to avoid the MPS fp16 NaN bug, which degrades structural fidelity.
-- **256x256 max on 8 GB Apple Silicon**: 512x512 OOMs on MPS. On a high-RAM
-  machine with `--device cpu`, 512x512 works fine.
-- **Slow on CPU**: minutes per image. `--device cuda` is much faster.
+  On the AMD CPU target (188 GB RAM), all backends run full fp32 / bf16 with
+  no quantization.
+- **Slow on CPU**: minutes per image at 20-30 steps. `--model sd15-turbo` /
+  `sdxl-turbo` (Hyper-SD 8-step LoRA) cuts wall time ~4x at a small quality
+  cost. `--device cuda` is much faster when a GPU is available.
 - **Deterministic given the seed**: re-running with the same seed reproduces
   the same image exactly.
 - **Z-Image path is depth-only**: `--model zimage` ignores the blueprint's

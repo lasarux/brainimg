@@ -26,6 +26,17 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 
 ## Tier 3 — big lift (separate project)
 
+- [x] **Hyper-SD turbo backends.** `--model sd15-turbo` / `sdxl-turbo` add
+      ByteDance's Hyper-SD 8-step distilled LoRA on top of the existing
+      SD 1.5 / SDXL base + depth/canny/seg ControlNets. No new base model,
+      no schema change -- the LoRA is ~70-150 MB, loaded + `fuse_lora(0.125)`
+      + scheduler swapped to `DDIMScheduler(timestep_spacing="trailing")`
+      inside `_build_pipeline` (gated by `cfg["turbo"]`). ~4x faster on CPU
+      than the 20-30 step non-turbo paths, at a small quality cost. Turbo
+      paths ignore the file's stored step count and use 8 steps unless
+      `--steps` is passed; `--cfg` defaults stay at 7.5/7.0 (CFG-preserved
+      LoRAs support 5-8). The biggest win on the AMD CPU target where every
+      step costs the same wall time.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

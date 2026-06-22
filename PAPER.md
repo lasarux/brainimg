@@ -11,17 +11,20 @@ abstract: |
   image format that stores the *meaning* of an image (a text caption) plus a
   tiny *structural blueprint* (128×128 depth, Canny-edge, and ADE20K
   segmentation maps) and a seed, and regenerates a visually faithful image on
-  decode using one of ten pluggable diffusion decoder backends: Stable
+  decode using one of fourteen pluggable diffusion decoder backends: Stable
   Diffusion 1.5 (default) or SDXL with two-to-three ControlNets, either of
   those plus ByteDance's Hyper-SD 8-step distilled LoRA (turbo), Z-Image-Turbo
   with a single Union ControlNet, Qwen-Image (Apache 2.0) with InstantX's
-  Union ControlNet, or FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat
-  conditioning, optionally with Hyper-SD's 8-step FLUX LoRA. We frame brainimg
+  Union ControlNet, HunyuanDiT v1.2 (distilled and full) with separate depth +
+  canny ControlNets, NVIDIA SANA 600M with an HED ControlNet fed the canny
+  map, FLUX.2-klein-4B as an img2img pseudo-ControlNet fed the depth map, or
+  FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat conditioning,
+  optionally with Hyper-SD's 8-step FLUX LoRA. We frame brainimg
   as a working, reproducible instantiation of the "Semantic-Relational Field /
   generative-recall" paradigm: rather than compressing appearance, it stores
   the scene's semantics and geometry and lets a diffusion model repaint it. We
   describe the format schema, the four-stage encoder (VLM captioning, depth
-  estimation, edge extraction, semantic segmentation), the ten decoder
+  estimation, edge extraction, semantic segmentation), the fourteen decoder
   backends, the per-device memory/precision strategies, and the
   brightness/saturation post-processing with a gamma fallback for extreme
   targets. Using measurements reproducible from the committed repository on an
@@ -82,14 +85,15 @@ useful—failure modes from transform codecs.
    MLX, Qwen2.5-VL-7B on CPU/CUDA), Depth-Anything-V2-Base, OpenCV Canny, and
    OneFormer ADE20K semantic segmentation, with explicit memory release
    between stages so the pipeline fits in 8 GB.
-4. **Ten pluggable decoder backends** spanning four model families
-   (SD 1.5, SDXL, Z-Image, Qwen-Image, FLUX), each with an optional Hyper-SD
-   8-step distilled turbo variant for SD 1.5, SDXL, and FLUX. All backends
-   consume the same blueprint; new backends require no schema change.
+4. **Fourteen pluggable decoder backends** spanning seven model families
+   (SD 1.5, SDXL, Z-Image, Qwen-Image, HunyuanDiT, SANA, FLUX), each with an
+   optional Hyper-SD 8-step distilled turbo variant for SD 1.5, SDXL, and
+   FLUX. All backends consume the same blueprint; new backends require no
+   schema change.
 5. **Empirical findings on distilled schedules and scale tuning.** On the
    Lenna test image, Hyper-SD's 8-step distilled LoRA *beats* the 30-step
    non-turbo path on both SD 1.5 (+0.95 dB) and FLUX (+1.41 dB) while running
-   3.5–4× faster on CPU. A grid sweep of ControlNet conditioning scales
+   3.1–3.9× faster on CPU. A grid sweep of ControlNet conditioning scales
    across two test images finds that Depth-Anything-V2-Base's sharper depth
    map over-constrains at the historical default of 1.5; lowering depth to
    0.8 and raising seg to parity (1.0) yields +0.51 dB on the turbo path.
@@ -256,7 +260,7 @@ caption itself is never truncated.
 ## 3.3 Decoder
 
 The decoder (`brainimg/generate.py`) regenerates an image from the blueprint
-using one of ten pluggable backends, all sharing the same blueprint schema
+using one of fourteen pluggable backends, all sharing the same blueprint schema
 and the same brightness/saturation post-processing:
 
 | `--model` | Base | Conditioning | Steps (default) | License |
@@ -267,15 +271,19 @@ and the same brightness/saturation post-processing:
 | `sdxl-turbo` | SDXL + Hyper-SD 8-step LoRA | depth + canny (+ seg) ControlNets | 8 | CreativeML Open RAIL-M |
 | `zimage` | `Tongyi-MAI/Z-Image-Turbo` | single Union ControlNet (depth) | 9 (8-step Turbo) | Tongyi-MAI non-commercial |
 | `qwen-image` | `Qwen/Qwen-Image` | single Union ControlNet (depth) | 50 | **Apache 2.0** |
+| `hunyuan` | `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled` | depth + canny ControlNets | 25 | tencent-hunyuan-community |
+| `hunyuan-full` | `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers` | depth + canny ControlNets | 50 | tencent-hunyuan-community |
+| `sana` | `Efficient-Large-Model/Sana_600M_1024px_diffusers` | single HED ControlNet (canny map) | 20 | **MIT** |
+| `flux2-klein` | `black-forest-labs/FLUX.2-klein-4B` | img2img (depth map as starting image) | 4 | **Apache 2.0** |
 | `flux-depth` | `black-forest-labs/FLUX.1-Depth-dev` | channel-concat `depth_map_b64` | 30 | FLUX.1-dev non-commercial |
 | `flux-canny` | `black-forest-labs/FLUX.1-Canny-dev` | channel-concat `canny_map_b64` | 30 | FLUX.1-dev non-commercial |
 | `flux-depth-turbo` | FLUX.1-Depth-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `depth_map_b64` | 8 | FLUX.1-dev non-commercial |
 | `flux-canny-turbo` | FLUX.1-Canny-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `canny_map_b64` | 8 | FLUX.1-dev non-commercial |
 
-All ten backends consume the **same blueprint**; the schema is unchanged
+All fourteen backends consume the **same blueprint**; the schema is unchanged
 when a new decoder is added. We describe the SD 1.5 / SDXL path in detail
 (the historical default), then summarise the turbo, Z-Image, Qwen-Image,
-and FLUX paths that diverge structurally.
+HunyuanDiT, SANA, FLUX.2-klein, and FLUX paths that diverge structurally.
 
 ### 3.3.1 SD 1.5 / SDXL (ControlNet stack)
 
@@ -410,6 +418,60 @@ parameter, distinct from `guidance_scale`), `controlnet_conditioning_scale
 (Apache 2.0) high-quality option in the stack; FLUX is non-commercial and
 Z-Image is non-commercial.
 
+### 3.3.6 HunyuanDiT v1.2 (depth + canny ControlNets)
+
+`--model hunyuan` loads Tencent's **Hunyuan-DiT** [Li et al., 2024]
+(arXiv 2405.08748) v1.2 Distilled — a bilingual (Chinese + English) DiT with
+**two separate ControlNets** (depth + canny), the same two-conditioner
+pattern as SD 1.5 / SDXL rather than a Union net. The blueprint's seg map
+is **silently ignored** (no seg ControlNet exists for HunyuanDiT). HunyuanDiT
+only supports fixed resolutions (1024, 1280, …); on a 512-side blueprint it
+auto-upscales to 1024. Text encoding uses BERT + T5 (the CLIP 77-token
+limit does not apply; the colour-style prefix is prepended unconditionally).
+bf16 throughout (HunyuanDiT's native dtype, sidesteps the MPS fp16 NaN bug).
+Defaults: depth scale 0.8, canny scale 0.8, `guidance_scale = 6.0`, 25 steps
+(distilled), 1024 max side. `--model hunyuan-full` swaps the Distilled base
+for the non-distilled `HunyuanDiT-v1.2-Diffusers` (50 steps, otherwise
+identical) so we can isolate whether distillation is the source of the
+visual artefacts (§4.6). **License**: tencent-hunyuan-community.
+
+### 3.3.7 SANA 600M (HED ControlNet, MIT)
+
+`--model sana` loads NVIDIA's **SANA** [Xie et al., 2024]
+(arXiv 2410.10629, MIT license) — a 600 M-parameter linear DiT with a DC-AE
+VAE (32× spatial compression) and a T5 text encoder. diffusers ships
+`SanaControlNetPipeline` + `SanaControlNetModel` since 0.38. **Only an HED
+(soft-edge) ControlNet exists for SANA** — no depth or canny ControlNet has
+been trained. We feed the blueprint's **canny** map to the HED ControlNet
+as the closest available conditioning type. This is a type mismatch: HED
+produces soft probability edges while Canny produces hard binary edges,
+creating a PSNR-vs-colour trade-off (§4.6, §4.7). The blueprint's depth and
+seg maps are **silently ignored**. The diffusers-format ControlNet is a
+community conversion (`ishan24/Sana_600M_1024px_ControlNet_diffusers`) of
+the official NVlabs checkpoint; the base model is the diffusers port from
+`Efficient-Large-Model`. bf16 throughout. Defaults: HED scale 0.4 (tuned via
+sweep on Lenna at 1024² — §4.8), `guidance_scale = 4.5`, 20 steps, 1024 max
+side, `max_sequence_length = 300`. SANA is the fastest 1024-native backend
+(52 s at 1024², ~5 GB RAM) but the lowest-PSNR backend due to the HED/canny
+mismatch.
+
+### 3.3.8 FLUX.2-klein-4B (img2img pseudo-ControlNet, Apache 2.0)
+
+`--model flux2-klein` loads Black Forest Labs' **FLUX.2-klein-4B**
+(Apache 2.0, ungated, 4 B-parameter rectified-flow transformer, 4-step
+distilled) as an **image-to-image** model. FLUX.2-klein has **no
+ControlNet**; we use it as a pseudo-ControlNet by feeding the blueprint's
+**depth map** as the `image` parameter (the starting point for img2img). The
+model encodes the depth map into latents and denoises from there with the
+caption as the text guide, "editing" the depth map into a photorealistic
+image rather than being structurally constrained by a ControlNet. The
+blueprint's canny and seg maps are **silently ignored** (only one image
+input). bf16 throughout. Defaults: `guidance_scale = 1.0`, 4 steps, 1024
+max side, `max_sequence_length = 512`. The only real FLUX.2 ControlNet
+(alibaba-pai Union, depth + canny) requires the VideoX-Fun library + the
+32 B gated FLUX.2-dev, which is impractical on CPU; the img2img path is the
+practical fallback.
+
 ## 3.4 Device and precision strategy
 
 The current dev target is an **AMD x86_64 CPU-only box with 188 GB RAM**
@@ -421,10 +483,11 @@ ControlNets (weights *and* activations) via `optimum-quanto` to avoid fp16
 matmuls entirely, while the VAE runs in fp32 for a clean final decode. On
 CPU, full fp32 is supported (best fidelity, slow) and an optional int8
 weights mode fits in ~5 GB at a small quality cost. On CUDA, fp16 works
-correctly and is fast. Z-Image, Qwen-Image, and FLUX are bf16-native and
-sidestep the MPS fp16 NaN bug entirely; on a CPU-only box they are kept
-resident in host RAM (diffusers' `enable_model_cpu_offload` raises
-`RuntimeError` without an accelerator to offload *to*).
+correctly and is fast. Z-Image, Qwen-Image, HunyuanDiT, SANA, FLUX.2-klein,
+and FLUX are bf16-native and sidestep the MPS fp16 NaN bug entirely; on a
+CPU-only box they are kept resident in host RAM (diffusers'
+`enable_model_cpu_offload` raises `RuntimeError` without an accelerator to
+offload *to*).
 
 | `--device` / `--model` | Precision | RAM | Speed | Fidelity |
 |---|---|---|---|---|
@@ -434,6 +497,9 @@ resident in host RAM (diffusers' `enable_model_cpu_offload` raises
 | `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **69 s** @ 512² | good (−0.23 dB vs 30-step) |
 | `cpu --model zimage` | bf16 resident | ~18 GB | 237 s @ 512² | good (depth-only) |
 | `cpu --model qwen-image` | bf16 resident | ~20 GB | 1436 s @ 512² | good (depth-only) |
+| `cpu --model hunyuan` | bf16 resident | ~12 GB | 1004 s @ 1024² | good PSNR, poor visual (§4.6) |
+| `cpu --model sana` | bf16 resident | ~5 GB | **52 s** @ 1024² | lowest PSNR (HED/canny mismatch) |
+| `cpu --model flux2-klein` | bf16 resident | ~13 GB | 240 s @ 512² | good PSNR, poor colour |
 | `cpu --model flux-depth --quantize` | bf16 + FP8 (host RAM) | ~12 GB | 654 s @ 512² | **best** (FLUX) |
 | `cpu --model flux-depth-turbo --quantize` | bf16 + FP8 + Hyper-SD 8-step | ~12 GB | **166 s** @ 512² | **best+** (+1.41 dB vs 30-step) |
 | `mps` (sd15, Apple Silicon) | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
@@ -461,6 +527,7 @@ scope for this writing session; §5 flags the planned evaluation.
   `diffusers` 0.38, `peft` 0.19 (for LoRA loading), `optimum-quanto` (FP8).
 - **Models:** SD 1.5 + `sd-vae-ft-mse` + 3 ControlNets (default), SDXL,
   Hyper-SD 8-step LoRAs (SD 1.5, SDXL, FLUX), Z-Image-Turbo, Qwen-Image,
+  HunyuanDiT v1.2 Distilled + full, SANA 600M, FLUX.2-klein-4B,
   FLUX.1-Depth-dev / -Canny-dev. Captioner is transformers Qwen2.5-VL-7B
   (CPU fallback; MLX is Apple-Silicon-only).
 - **Samples:** `samples/real.jpg` (256×256 puppy JPEG, 13,430 B),
@@ -515,6 +582,21 @@ assets, which we reference here as figures:
 - `lenna_flux_depth_comparison.jpg`, `lenna_flux_depth.png` — FLUX.1-Depth-dev
   at 512×512 with FP8-quantized transformer + T5-XXL (`--quantize`). The
   first FLUX reconstruction committed to the repository.
+- `lenna_hunyuan_comparison.jpg`, `lenna_hunyuan.png` — HunyuanDiT v1.2
+  Distilled on `lenna.brainimg` at 1024×1024 bf16 (25-step distilled
+  schedule; depth + canny ControlNets; seg ignored per §3.3.6). Despite
+  scoring #3 by PSNR (§4.7) the reconstruction shows visible artefacts and
+  palette collapse — a concrete pixel-metric-vs-perceptual disconnect (§4.6).
+- `lenna_sana*.png` — SANA 600M on `lenna.brainimg` at 1024×1024 bf16
+  (20-step, HED ControlNet fed the canny map; depth + seg ignored per
+  §3.3.7). The HED/canny mismatch produces the lowest PSNR of any backend.
+- `lenna_flux2_klein.png` — FLUX.2-klein-4B on `lenna.brainimg` at 512×512
+  bf16 (4-step img2img, depth map as the starting image; canny + seg ignored
+  per §3.3.8). The pseudo-ControlNet reaches #2 PSNR overall but collapses
+  the colour palette into warm tones.
+- `lenna_grid.jpg` — combined side-by-side grid of all backends
+  (SD 1.5, SDXL, their turbos, Z-Image, Qwen-Image, HunyuanDiT full,
+  SANA, FLUX.2-klein, FLUX.1-Depth-dev and its turbo).
 
 ## 4.4 Determinism
 
@@ -531,15 +613,15 @@ engineering finding is that on Apple Silicon the SD 1.5 naive fp16 path is
 unusable (NaNs), forcing int8 weights + activations; this halves memory
 but degrades structural fidelity relative to CPU fp32. CPU fp32 is the
 recommended SD 1.5 mode on a high-RAM machine for best quality; CUDA fp16
-is the recommended mode for speed. Z-Image-Turbo and FLUX are bf16
-throughout (their native dtype), which sidesteps the MPS fp16 NaN bug
-entirely; FLUX additionally supports FP8 quantization of the transformer
-+ T5 via `optimum.quanto` to halve resident memory at a small quality
-cost.
+is the recommended mode for speed. Z-Image-Turbo, Qwen-Image, HunyuanDiT,
+SANA, FLUX.2-klein, and FLUX are bf16 throughout (their native dtype),
+which sidesteps the MPS fp16 NaN bug entirely; FLUX additionally supports
+FP8 quantization of the transformer + T5 via `optimum.quanto` to halve
+resident memory at a small quality cost.
 
 ## 4.6 Known failure modes
 
-Two failure modes remain documented in `TODO.md`:
+Five failure modes remain documented in `TODO.md`:
 
 - **Captioner misidentification.** The 7B captioner misidentifies Lenna's dark
   curled hair as *"a wide-brimmed straw hat adorned with purple feathers."*
@@ -560,6 +642,37 @@ Two failure modes remain documented in `TODO.md`:
   drift is much smaller (SDXL@1024 concentrates in the right band).
   FLUX.1-Depth-dev at 512×512 produces a less-drifted palette than SDXL@512
   on the same blueprint (§4.7).
+- **HunyuanDiT pixel-metric-vs-perceptual disconnect.** HunyuanDiT scores
+  13.39 dB PSNR (#3 by pixel metrics, §4.7) yet is visually the worst
+  backend by a wide margin — visible artefacts and a blue/purple band
+  collapse (17–21% vs the source's 53%) that MSE/PSNR do not capture. The
+  good MSE likely comes from getting overall brightness/layout right at
+  1024² while producing texture/feature artefacts. We tested three variants
+  to isolate the cause: distilled (25 steps, cfg 6.0) = 13.39 dB, full
+  non-distilled (50 steps, cfg 6.0) = 12.33 dB, distilled (25 steps, cfg 9.0)
+  = 12.03 dB — all three collapse the palette, so the issue is the model
+  itself, not the distillation or parameters. The likely cause is a
+  language mismatch: HunyuanDiT is bilingual with a BERT tokenizer trained
+  primarily on Chinese data; the English caption + Lenna's pink/magenta
+  palette produces inferior results regardless of tuning. Not recommended
+  for visual use; kept for the systems-study comparison.
+- **SANA HED/canny mismatch.** SANA's only available ControlNet is an HED
+  (soft-edge) net; we feed the blueprint's canny (hard binary edge) map to
+  it. This type mismatch creates a PSNR-vs-colour trade-off: on Lenna at
+  1024², scale 0.5 gives the best PSNR (10.20 dB) but collapses the
+  blue/purple band (20% vs source 53%), while scale 1.0 preserves colour
+  (54% blue) but gives the worst PSNR (8.69 dB). The default 0.4 is the
+  visually best compromise (9.91 dB, 16% blue). SANA is the fastest
+  1024-native backend (52 s at 1024², ~5 GB RAM) but the lowest-PSNR backend
+  due to the mismatch.
+- **FLUX.2-klein img2img palette collapse.** The pseudo-ControlNet img2img
+  path (§3.3.8) reaches #2 PSNR overall (13.76 dB at 512², after FLUX depth
+  turbo's 14.49 dB) but collapses the colour palette (15% blue vs source
+  53%): the model converts the depth map's grayscale into warm tones
+  regardless of the caption. As with HunyuanDiT, this is a case where
+  pixel-level MSE rewards overall brightness/layout accuracy while
+  missing a colour-distribution failure that the human eye sees
+  immediately.
 
 The brightness-clamp edge case that was previously listed here has been
 **fixed** with a gamma fallback (§3.3.1): when the uniform gain clamp
@@ -585,27 +698,33 @@ the new defaults (0.8/1.0/1.0) from the scale sweep (§4.8).
 | SDXL turbo (Hyper-SD) | 8 | **69** | 6085 | 10.29 | 61.1 |
 | Z-Image (depth-only) | 8 | 237 | 7651 | 9.29 | 70.3 |
 | Qwen-Image (depth-only) | 50 | 1436 | 6810 | 9.80 | 68.4 |
+| SANA (HED/canny, scale 0.4) | 20 | 52 @ 1024² | 6633 | 9.91 | 64.2 |
+| HunyuanDiT (depth+canny, 1024²) | 25 | 1004 | 2977 | 13.39 | 44.3 |
+| FLUX.2-klein (img2img, 512²) | 4 | 240 | 2736 | 13.76 | 41.9 |
 | FLUX.1-Depth-dev (FP8) | 30 | 654 | 3202 | 13.08 | 43.6 |
 | **FLUX.1-Depth-dev turbo (FP8)** | 8 | **166** | **2314** | **14.49** | **37.1** |
 
-Five observations:
+Six observations:
 
 1. **Hyper-SD 8-step distilled schedules beat their 30-step counterparts.**
    On SD 1.5, the turbo path scores 9.65 dB vs 8.70 dB for the 30-step
-   path with old scales (+0.95 dB) — at 3.5× less wall time. On FLUX, the
+   path with old scales (+0.95 dB) — at 3.1× less wall time. On FLUX, the
    turbo path scores 14.49 dB vs 13.08 dB for the 30-step path (+1.41 dB)
-   — at 4× less wall time. The distilled schedule lands closer to the
+   — at 3.9× less wall time. The distilled schedule lands closer to the
    conditioning maps than the longer UniPC / FlowMatch schedule on this
    image. This is counter-intuitive (fewer steps usually means lower
    quality) and is a property of the distillation, not the base model.
 
 2. **FLUX.1-Depth-dev turbo is the best result across all backends**
    (14.49 dB, 166 s) — the 8-step distilled FLUX beats both the 30-step
-   FLUX and every other backend, while being 4× faster than the 30-step
+   FLUX and every other backend, while being 3.9× faster than the 30-step
    FLUX. The Hyper-SD FLUX LoRA was trained on base FLUX.1-dev, not the
    Control variants; the decoder strips the shape-incompatible
    `x_embedder` / `context_embedder` deltas (§3.3.4) but the
    attention/FFN deltas — the bulk of the distillation — load cleanly.
+   FLUX.2-klein img2img (13.76 dB) and HunyuanDiT (13.39 dB) follow at
+   #2 and #3 by PSNR, both ahead of the 30-step FLUX (13.08 dB) — but see
+   observation 6 on the pixel-metric-vs-perceptual disconnect.
 
 3. **ControlNet scale tuning adds +0.65 dB on the SD 1.5 30-step path**
    (8.70 → 9.35 dB) and +0.51 dB on the turbo path (9.14 → 9.65 dB,
@@ -622,7 +741,19 @@ Five observations:
 5. **Z-Image is the weakest depth-only backend** (9.29 dB, 237 s) —
    slightly below SD 1.5 turbo (9.65 dB, 50 s) which uses three
    conditioning maps. Z-Image's photorealism advantage doesn't show up
-   in pixel-level MSE on Lenna's narrow palette.
+   in pixel-level MSE on Lenna's narrow palette. SANA (9.91 dB, 52 s @
+   1024²) edges out Z-Image on PSNR despite the HED/canny mismatch
+   (§4.6) and is 4.5× faster at a higher native resolution.
+
+6. **Pixel-level PSNR does not track perceptual quality for two backends.**
+   HunyuanDiT (#3 by PSNR, 13.39 dB) is visually the worst backend by a
+   wide margin — visible artefacts and a blue/purple band collapse
+   (17–21% vs source 53%) — and FLUX.2-klein (#2 by PSNR, 13.76 dB)
+   collapses the palette into warm tones (15% blue vs source 53%). MSE
+   rewards getting overall brightness/layout right but does not penalise
+   texture/feature or colour-distribution failures; this is the concrete
+   pixel-metric-vs-perceptual disconnect flagged in §5.3 as motivation
+   for adding LPIPS / CLIP-score / FID in a real evaluation.
 
 **These numbers do not generalise beyond Lenna** (a single source with a
 narrow pink palette); §5.3 notes that a real evaluation requires more
@@ -712,9 +843,10 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
 - **Quality depends on device.** CPU fp32 gives the best SD 1.5
   reconstruction; on 8 GB Apple Silicon, int8 quantization (required by
   the MPS fp16 NaN bug) degrades structural fidelity. Z-Image-Turbo,
-  Qwen-Image, and FLUX are bf16-native and are not supported on 8 GB
-  Apple Silicon; FLUX CPU requires ~22 GB host RAM (or ~12 GB with
-  `--quantize`).
+  Qwen-Image, HunyuanDiT, SANA, FLUX.2-klein, and FLUX are bf16-native
+  and are not supported on 8 GB Apple Silicon; FLUX CPU requires ~22 GB
+  host RAM (or ~12 GB with `--quantize`). SANA is the lightest of the
+  bf16-native backends (~5 GB RAM).
 - **Lossy by design.** Reconstruction is semantically faithful, not
   pixel-identical. The format is explicitly unsuited to medical, legal, or
   forensic images.
@@ -723,16 +855,21 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
   impact of caption errors.
 - **Per-backend palette fidelity.** SDXL and Z-Image, run at sizes smaller
   than their native training resolution (1024), can drift into a different
-  hue *distribution* than the source (§4.6). This is a content/palette
-  drift the existing brightness/saturation post-processor cannot correct.
-  Prefer each backend's native resolution (512 for SD 1.5, 1024 for SDXL /
-  Z-Image / FLUX) when colour fidelity matters.
+  hue *distribution* than the source (§4.6). HunyuanDiT and FLUX.2-klein
+  exhibit a more severe form of this — a palette *collapse* (blue/purple
+  band 15–21% vs source 53%) that even MSE does not catch (§4.6, §4.7). This
+  is a content/palette drift the existing brightness/saturation
+  post-processor cannot correct. Prefer each backend's native resolution
+  (512 for SD 1.5, 1024 for SDXL / Z-Image / HunyuanDiT / SANA /
+  FLUX.2-klein / FLUX) when colour fidelity matters.
 - **License footprint.** The default backend (SD 1.5 + ControlNets) is
   CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is non-commercial.
-  FLUX.1-Depth-dev / -Canny-dev are FLUX.1-dev non-commercial. Qwen-Image
-  is **Apache 2.0** — the only fully-open high-quality option. If
-  distribution matters, the SD 1.5/SDXL and Qwen-Image paths are the
-  permissively licensed choices.
+  HunyuanDiT is tencent-hunyuan-community (a bespoke community license,
+  not OSI-approved). FLUX.1-Depth-dev / -Canny-dev are FLUX.1-dev
+  non-commercial. Qwen-Image, SANA, and FLUX.2-klein-4B are **Apache 2.0**
+  — the three fully-open options. If distribution matters, the SD 1.5/SDXL,
+  Qwen-Image, SANA, and FLUX.2-klein paths are the permissively licensed
+  choices.
 
 ### 5.3 Planned evaluation (not run here)
 
@@ -751,22 +888,27 @@ and the `samples/` directory.
 brainimg is a small, reproducible prototype of a different way to compress
 images: store the *meaning and structure* of a scene and let a diffusion model
 repaint it. We have described the format schema, the four-stage encoder, the
-ten decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
-Z-Image-Turbo, Qwen-Image, FLUX.1-Depth-dev / -Canny-dev and their Hyper-SD
-turbo variants) with their quality post-processing and gamma brightness
-fallback, and the device/precision tradeoffs across CPU fp32, MPS int8, and
-CUDA fp16. Using measurements reproducible from the committed repository on
-an AMD CPU target with 188 GB RAM, we observe few-kilobyte blueprints
-(2.2×–99.7× compression), deterministic reconstruction given a seed, and
-two counter-intuitive empirical findings: (1) Hyper-SD's 8-step distilled
-schedules *beat* their 30-step counterparts on both SD 1.5 (+0.95 dB) and
-FLUX (+1.41 dB) while running 3.5–4× faster on CPU, and (2) lower
-ControlNet depth scales (0.8 vs 1.5) improve fidelity with the
-Depth-Anything-V2-Base stack. FLUX.1-Depth-dev turbo (FP8, 8 steps) is the
-best result across all backends at 14.49 dB PSNR and 166 s. We frame this
-as a systems study of a paradigm, not a JPEG replacement, and we are
-explicit about its limitations—decoder dependency, compute cost,
-per-backend palette fidelity, and lossy-by-design semantics.
+fourteen decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
+Z-Image-Turbo, Qwen-Image, HunyuanDiT v1.2 distilled and full, SANA,
+FLUX.2-klein-4B img2img, and FLUX.1-Depth-dev / -Canny-dev with their
+Hyper-SD turbo variants) with their quality post-processing and gamma
+brightness fallback, and the device/precision tradeoffs across CPU fp32,
+MPS int8, and CUDA fp16. Using measurements reproducible from the
+committed repository on an AMD CPU target with 188 GB RAM, we observe
+few-kilobyte blueprints (2.2×–99.7× compression), deterministic
+reconstruction given a seed, and two counter-intuitive empirical findings:
+(1) Hyper-SD's 8-step distilled schedules *beat* their 30-step
+counterparts on both SD 1.5 (+0.95 dB) and FLUX (+1.41 dB) while running
+3.1–3.9× faster on CPU, and (2) lower ControlNet depth scales (0.8 vs 1.5)
+improve fidelity with the Depth-Anything-V2-Base stack.
+FLUX.1-Depth-dev turbo (FP8, 8 steps) is the best result across all
+backends at 14.49 dB PSNR and 166 s. We also report a concrete
+pixel-metric-vs-perceptual disconnect: HunyuanDiT and FLUX.2-klein score
+#2 and #3 by PSNR yet are visually the worst backends due to palette
+collapse that MSE does not capture. We frame this as a systems study of a
+paradigm, not a JPEG replacement, and we are explicit about its
+limitations—decoder dependency, compute cost, per-backend palette
+fidelity, and lossy-by-design semantics.
 
 Planned work tracked in `TODO.md` includes per-region hue transfer (a fix
 for the SDXL hue-distribution drift documented in §4.6) and a captioner
@@ -823,15 +965,19 @@ Markdown draft; a submission version would expand them into a `.bib`.
 
 - Rombach, R., Blattmann, A., Lorenz, D., Esser, P., Ommer, B. (2022).
   *High-Resolution Image Synthesis with Latent Diffusion Models* (Stable
-  Diffusion). CVPR 2023.
+  Diffusion, arXiv 2112.10752). CVPR 2022.
 - Zhang, L., Rao, A., Agrawala, M. (2023). *Adding Conditional Control to
-  Text-to-Image Diffusion Models* (ControlNet). ICCV 2023.
-- Gu, Z., Wang, W., Huang, Z., Chen, J., Dong, Z., Zhang, W., et al. (2024).
-  *Depth Anything V2* (Depth-Anything-V2-Base).
+  Text-to-Image Diffusion Models* (ControlNet, arXiv 2302.05543). ICCV 2023.
+- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J., Zhao, H. (2024).
+  *Depth Anything V2* (Depth-Anything-V2-Base, arXiv 2406.09414). NeurIPS 2024.
 - Jain, J., Li, J., Chiu, M.-T., et al. (2023). *OneFormer: One Transformer to
-  Rule Universal Image Segmentation* (OneFormer ADE20K).
-- Wang, P. et al. (2024). *Qwen2-VL / Qwen2.5-VL Technical Report*
-  (vision-language captioning).
+  Rule Universal Image Segmentation* (arXiv 2211.06220, CVPR 2023;
+  `shi-labs/oneformer_ade20k_swin_tiny`).
+- Wang, P. et al. (2024). *Qwen2-VL: Enhancing Vision-Language Model's
+  Perception of the World at Any Resolution* (arXiv 2409.12191).
+  `mlx-community/Qwen2-VL-2B-Instruct-4bit` (Apple Silicon MLX 4-bit
+  captioning) and `Qwen/Qwen2.5-VL-7B-Instruct` (transformers CPU/CUDA
+  fallback).
 - Apple MLX framework and `mlx-vlm` (Apple Silicon 4-bit captioning).
 - HuggingFace `diffusers` library; `transformers` library.
 - HuggingFace `optimum-quanto` (int8 quantization for MPS/CPU).
@@ -857,6 +1003,20 @@ Markdown draft; a submission version would expand them into a `.bib`.
 - Wu, C., Li, J., Zhou, J., et al. (2025). *Qwen-Image Technical Report*
   (arXiv 2508.02324). `Qwen/Qwen-Image` (Apache 2.0 DiT) with
   `InstantX/Qwen-Image-ControlNet-Union` (Union ControlNet, Apache 2.0).
+- Li, Z., Zhang, J., Lin, Q., et al. (2024). *Hunyuan-DiT: A Powerful
+  Multi-Resolution Diffusion Transformer with Fine-Grained Chinese
+  Understanding* (arXiv 2405.08748). `Tencent-Hunyuan/HunyuanDiT-v1.2-
+  Diffusers-Distilled` and `HunyuanDiT-v1.2-Diffusers` (non-distilled) with
+  separate `HunyuanDiT-v1.2-ControlNet-Diffusers-{Depth,Canny}`
+  (tencent-hunyuan-community license).
+- Xie, E., Chen, J., Chen, J., et al. (2024). *SANA: Efficient
+  High-Resolution Image Synthesis with Linear Diffusion Transformers*
+  (arXiv 2410.10629, MIT). `Efficient-Large-Model/Sana_600M_1024px_diffusers`
+  + `ishan24/Sana_600M_1024px_ControlNet_diffusers` (community diffusers
+  conversion of the official NVlabs HED ControlNet).
+- Black Forest Labs. *FLUX.2-klein-4B* (Apache 2.0, ungated, 4 B
+  rectified-flow transformer, 4-step distilled img2img).
+  `black-forest-labs/FLUX.2-klein-4B`.
 - `peft` (Parameter-Efficient Fine-Tuning library, HuggingFace) for LoRA
   loading on the turbo paths.
 - Wallace, G. K. (1992). *The JPEG Still Picture Compression Standard.*

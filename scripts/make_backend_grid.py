@@ -1,11 +1,12 @@
-"""Build a single grid panel: original + all Lenna reconstructions.
+"""Build a single grid panel: original + all reconstructions for a sample.
 
-Lays out the original Lenna image alongside every available reconstruction
-at 512x512, labeled with model name + PSNR, in a grid. Handy for eyeballing
+Lays out the original image alongside every available reconstruction at a
+common size, labeled with model name + PSNR, in a grid. Handy for eyeballing
 the fidelity differences across all decoder backends at once.
 
 Usage:
-    python scripts/make_lenna_grid.py
+    python scripts/make_backend_grid.py mandril
+    python scripts/make_backend_grid.py peppers --size 512
 """
 from __future__ import annotations
 
@@ -17,8 +18,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from scripts.compare_backends import DEFAULT_BACKENDS, _find_source, _resize
 
-def _stats(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
+
+def _mse_psnr(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     diff = a.astype(np.float32) - b.astype(np.float32)
     mse = float(np.mean(diff * diff))
     psnr = float("inf") if mse <= 0 else 20.0 * np.log10(255.0) - 10.0 * np.log10(mse)
@@ -47,26 +50,29 @@ def _label_panel(img: Image.Image, label: str, sublabel: str = "") -> Image.Imag
 
 
 def main() -> int:
-    src = Image.open("samples/lenna.tiff").convert("RGB").resize((512, 512), Image.LANCZOS)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Build a grid of original + all backend reconstructions."
+    )
+    parser.add_argument("sample", help="sample name (e.g. mandril, peppers, cameraman)")
+    parser.add_argument("--size", type=int, default=512, help="cell size (default: 512)")
+    parser.add_argument(
+        "--cols", type=int, default=4, help="grid columns (default: 4)"
+    )
+    args = parser.parse_args()
+
+    src_path = _find_source(args.sample)
+    src = _resize(Image.open(src_path), (args.size, args.size))
     src_arr = np.array(src)
 
-    recons = [
-        ("ORIGINAL", "", "samples/lenna.tiff"),
-        ("SD 1.5", "30-step, new scales", "lenna_sd15_new_scales.png"),
-        ("SD 1.5 turbo", "8-step Hyper-SD", "lenna_sd15_turbo.png"),
-        ("SDXL", "30-step, 512", "lenna_sdxl_512_new_scales.png"),
-        ("SDXL turbo", "8-step Hyper-SD", "lenna_sdxl_turbo.png"),
-        ("Z-Image", "depth-only, 8-step", "lenna_zimage.png"),
-        ("Qwen-Image", "depth-only, 50-step", "lenna_qwen_image.png"),
-        ("HunyuanDiT full", "d+c, 50-step, 1024", "lenna_hunyuan_full.png"),
-        ("SANA", "HED/canny, 20-step, 1024", "lenna_sana_s0.4.png"),
-        ("FLUX.2-klein", "img2img, 4-step, 512", "lenna_flux2_klein.png"),
-        ("FLUX depth", "30-step, FP8", "lenna_flux_depth.png"),
-        ("FLUX depth turbo", "8-step Hyper-SD, FP8", "lenna_flux_depth_turbo.png"),
-    ]
+    recons = [("ORIGINAL", "", src_path)]
+    for label, suffix in DEFAULT_BACKENDS:
+        recons.append((label, "", f"{args.sample}_{suffix}.png"))
 
-    cell_w, cell_h = 512, 512 + 48
-    cols = 4
+    cell_w = args.size
+    cell_h = args.size + 48
+    cols = args.cols
     rows = (len(recons) + cols - 1) // cols
     gap = 12
 
@@ -81,22 +87,24 @@ def main() -> int:
         y = gap + row * (cell_h + gap)
 
         if not Path(path).exists():
-            panel = _label_panel(Image.new("RGB", (512, 512), (40, 40, 40)), label, "(missing)")
+            panel = _label_panel(
+                Image.new("RGB", (args.size, args.size), (40, 40, 40)), label, "(missing)"
+            )
         else:
-            img = Image.open(path).convert("RGB").resize((512, 512), Image.LANCZOS)
+            img = _resize(Image.open(path), (args.size, args.size))
             if label == "ORIGINAL":
                 sub = "source"
             else:
-                mse, psnr = _stats(np.array(img), src_arr)
+                mse, psnr = _mse_psnr(np.array(img), src_arr)
                 if np.isfinite(psnr):
-                    sub = f"{sublabel}  |  PSNR {psnr:.2f} dB"
+                    sub = f"PSNR {psnr:.2f} dB"
                 else:
-                    sub = f"{sublabel}  |  PSNR inf"
+                    sub = "PSNR inf"
             panel = _label_panel(img, label, sub)
 
         canvas.paste(panel, (x, y))
 
-    out = "lenna_grid.jpg"
+    out = f"{args.sample}_grid.jpg"
     canvas.save(out, format="JPEG", quality=90)
     print(f"wrote {out} ({Path(out).stat().st_size:,} bytes)")
     print(f"grid: {len(recons)} panels, {cols}x{rows}")

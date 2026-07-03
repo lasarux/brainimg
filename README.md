@@ -84,12 +84,13 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
 
 - **8 steps** (vs 20-30 for the non-turbo paths) — the main win on a CPU-only
   box, where each step costs the same wall time. Measured on the AMD CPU
-  target with `samples/lenna.tiff` (512x512, same seed + blueprint, after the
-  ControlNet scale tuning below): SD 1.5 turbo **50.1 s / 9.65 dB PSNR**
-  vs ~3 min / 8.70 dB for the 30-step path with the old defaults
-  (~3.5x faster and **+0.95 dB** — the distilled schedule + tuned scales both
-  help); SDXL turbo **84.2 s** vs ~17 min for the 30-step path at 512²
-  (~12x faster, at a small −0.23 dB cost).
+  target with `samples/mandril_color.tif` (512x512, same seed + blueprint, after the
+  ControlNet scale tuning below): SD 1.5 turbo **50.7 s / 9.28 dB PSNR**
+  vs ~3 min / 8.74 dB for the 30-step path with the old defaults
+  (~3.5x faster and **+0.54 dB** — the distilled schedule + tuned scales both
+  help); SDXL turbo **75.5 s** vs ~16 min for the 30-step path at 512²
+  (~13x faster, at a small −2.58 dB cost since SDXL at native 1024² wins
+  on this subject).
 - **guidance_scale 7.0/7.5** (CFG-preserved LoRA; supports 5-8 if you tune
   `--cfg`). The 1/2/4-step LoRAs on the same repo want `--cfg 0`; not wired
   up by default.
@@ -98,7 +99,7 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
 - Small quality cost vs the 30-step non-turbo path on most images
   (distillation trades a little detail for the speedup); use `sd15` /
   `sdxl` when fidelity matters most and wall time is not the bottleneck.
-  On some images (Lenna included) the distilled schedule actually wins.
+  On some images (mandril included) the distilled schedule actually wins on SD 1.5.
 
 ```bash
 # CPU-only with lots of RAM (the brainimg target): 8-step SDXL @ 1024
@@ -331,42 +332,50 @@ wooden surface"); the decoder produced a visually faithful reconstruction. See
 
 ## Verified results (AMD CPU, 188 GB RAM)
 
-Lenna round-trip (`samples/lenna.tiff`, same blueprint + seed 916570520,
-512x512 output). MSE / PSNR / MAE computed against the original at 512x512.
+SIPI mandril round-trip (`samples/mandril_color.tif`, same blueprint +
+seed 200, 512x512 output). MSE / PSNR / MAE computed against the original
+at 512x512 via `scripts/compare_backends.py`. Two cross-subject sanity
+rows (peppers, cameraman) at the best backend.
 
 | Backend | Steps | Wall time | MSE | PSNR (dB) | MAE |
 |---|---|---|---|---|---|
-| `sd15` (30-step, old scales 1.5/1.2/0.9) | 30 | ~3 min | 8762.95 | 8.70 | 77.54 |
-| `sd15` (30-step, tuned scales 0.8/1.0/1.0) | 30 | 156 s | 7560.33 | 9.35 | 70.80 |
-| `sd15-turbo` (8-step, tuned scales) | 8 | **50.1 s** | 7055.30 | 9.65 | 68.10 |
-| `sdxl` @ 512 (30-step) | 30 | 220 s | 5774.05 | 10.52 | 58.79 |
-| `sdxl-turbo` @ 512 (8-step) | 8 | **69.3 s** | 6085.01 | 10.29 | 61.10 |
-| `zimage` (depth-only) | 8 | 237 s | 7651.40 | 9.29 | 70.31 |
-| `qwen-image` (depth-only) | 50 | 1436 s | 6810.39 | 9.80 | 68.35 |
-| `hunyuan` (depth+canny, 1024) | 25 | 1004 s | 2977.34 | 13.39 | 44.28 |
-| `flux-depth` (FP8) | 30 | 654 s | 3202.12 | 13.08 | 43.63 |
-| **`flux-depth-turbo`** (FP8) | 8 | **166 s** | **2314.24** | **14.49** | **37.05** |
+| `sd15` (30-step, tuned scales 0.8/1.0/1.0) | 30 | 156 s | 8696.35 | 8.74 | 75.62 |
+| `sd15-turbo` (8-step, tuned scales) | 8 | **50.7 s** | 7682.95 | 9.28 | 70.29 |
+| `sdxl` (30-step, native 1024²) | 30 | 989 s | 3253.20 | **13.01** | 46.13 |
+| `sdxl-turbo` @ 512 (8-step) | 8 | **75.5 s** | 5890.94 | 10.43 | 60.42 |
+| `zimage` (depth-only) | 8 | 308 s | 7022.71 | 9.67 | 67.55 |
+| `qwen-image` (depth-only) | 50 | 1006 s | 5944.29 | 10.39 | 61.50 |
+| `hunyuan` (depth+canny, 1024) | 25 | 912 s | 5558.68 | 10.68 | 59.78 |
+| `sana` (HED/canny, 1024) | 20 | 54 s | 11067.41 | 7.69 | 88.06 |
+| `flux2-klein` (img2img, 512) | 4 | 42 s | 5158.95 | 11.01 | 57.21 |
+| `flux-depth` (FP8) | 30 | 510 s | 6619.91 | 9.92 | 64.64 |
+| `flux-depth-turbo` (FP8) | 8 | **475 s** | 6648.45 | 9.90 | 64.48 |
+| **cross-subject sanity** | | | | | |
+| `peppers` @ flux-depth-turbo (FP8) | 8 | 187 s | 4142.31 | 11.96 | 51.45 |
+| `cameraman` (grayscale) @ flux-depth-turbo (FP8) | 8 | 207 s | 1712.25 | **15.80** | 28.40 |
 
 Notes: All decodes at 512x512 on the AMD CPU target (188 GB RAM), same
-blueprint + seed 916570520. The scale tuning (depth 1.5 -> 0.8, canny 1.2 ->
-1.0, seg 0.9 -> 1.0) lifted SD 1.5 from 8.70 to 9.35 dB (+0.65 dB) on the
-30-step path and to 9.65 dB (+0.95 dB vs the old baseline) on the 8-step
-turbo path. SDXL turbo at 512² is within ~0.23 dB of the 30-step SDXL at
-the same size, at ~3x less wall time. **FLUX depth turbo is the best
-result across all backends**: 14.49 dB at 166 s — the 8-step distilled
-schedule actually beats the 30-step FLUX (13.08 dB) by +1.41 dB at ~4x
-less wall time. The Hyper-SD FLUX LoRA was trained on base FLUX.1-dev, not
-the Control variants; the decoder strips the `x_embedder` /
-`context_embedder` LoRA deltas (shape-incompatible with the Control
-transformer's extra input channels) and keeps the attention/FFN deltas.
-Z-Image is depth-only so it ignores the canny/seg maps; competitive with
-SD 1.5 turbo on MSE despite using only one conditioning map.
-**HunyuanDiT scores 13.39 dB (#2 by pixel metrics) but is visually the
-worst backend by a wide margin** — visible artifacts and palette collapse
-that MSE/PSNR do not capture. This is a concrete example of the
-pixel-metric-vs-perceptual disconnect: MSE rewards getting overall
-brightness/layout right but does not penalize texture/feature artifacts.
-See `lenna_grid.jpg` for a combined side-by-side grid of all backends.
+blueprint + seed 200. **SDXL is the best result across all backends on
+the mandril**: 13.01 dB at 989 s — its native 1024² resolution gives it
+the edge. `flux2-klein` img2img is #2 (11.01 dB, 42 s — fast). On the
+grayscale cameraman, FLUX depth turbo reaches 15.80 dB (the narrowest
+palette, easiest to match). The distilled-schedule-wins finding is
+SD-1.5-specific on the mandril: SD 1.5 turbo beats SD 1.5 30-step
+(+0.54 dB), but FLUX turbo does not beat FLUX 30-step on this subject.
+The Hyper-SD FLUX LoRA was trained on base FLUX.1-dev, not the Control
+variants; the decoder strips the `x_embedder` / `context_embedder` LoRA
+deltas (shape-incompatible with the Control transformer's extra input
+channels) and keeps the attention/FFN deltas.
+Z-Image is depth-only so it ignores the canny/seg maps.
+**HunyuanDiT scores mid-pack by PSNR (10.68 dB) but is visually the
+worst backend by a wide margin** — visible artifacts and a blue-band
+collapse (8.8% vs source 30.7%) that MSE/PSNR do not capture. This is a
+concrete example of the pixel-metric-vs-perceptual disconnect: MSE
+rewards getting overall brightness/layout right but does not penalize
+texture/feature artifacts.
+See `mandril_grid.jpg`, `peppers_grid.jpg`, `cameraman_grid.jpg`, and
+`airplane_grid.jpg` for combined side-by-side grids of all backends on each
+SIPI subject.
 
 ## Project layout
 

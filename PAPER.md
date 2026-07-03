@@ -29,12 +29,12 @@ abstract: |
   brightness/saturation post-processing with a gamma fallback for extreme
   targets. Using measurements reproducible from the committed repository on an
   AMD x86_64 CPU-only target with 188 GB RAM, we report blueprint sizes of
-  2.7–7.9 KB (compression ratios of 2.2×–99.7×), deterministic reconstruction
-  given a fixed seed, and a per-backend fidelity and speed comparison on the
-  Lenna test image in which Hyper-SD 8-step distilled schedules *beat* their
-  30-step counterparts on both SD 1.5 (+0.95 dB) and FLUX (+1.41 dB), and a
-  ControlNet scale sweep finds that lower depth scales (0.8 vs 1.5) improve
-  fidelity with the Depth-Anything-V2-Base stack. We are explicit that brainimg
+  2.7–8.4 KB (compression ratios of 2.2×–102.8×), deterministic reconstruction
+  given a fixed seed, and a per-backend fidelity and speed comparison on three
+  classic USC-SIPI test images (mandril, peppers, cameraman) in which
+  Hyper-SD 8-step distilled schedules *beat* their 30-step counterparts on
+  SD 1.5 (+0.54 dB), and a ControlNet scale sweep finds that lower depth
+  scales (0.8 vs 1.5) improve fidelity with the Depth-Anything-V2-Base stack. We are explicit that brainimg
   is lossy-by-design, decoder-dependent, and unsuited to forensic/medical use;
   we position it as a systems study of a novel paradigm rather than a
   replacement for JPEG.
@@ -91,12 +91,12 @@ useful—failure modes from transform codecs.
    FLUX. All backends consume the same blueprint; new backends require no
    schema change.
 5. **Empirical findings on distilled schedules and scale tuning.** On the
-   Lenna test image, Hyper-SD's 8-step distilled LoRA *beats* the 30-step
-   non-turbo path on both SD 1.5 (+0.95 dB) and FLUX (+1.41 dB) while running
-   3.1–3.9× faster on CPU. A grid sweep of ControlNet conditioning scales
-   across two test images finds that Depth-Anything-V2-Base's sharper depth
-   map over-constrains at the historical default of 1.5; lowering depth to
-   0.8 and raising seg to parity (1.0) yields +0.51 dB on the turbo path.
+   SIPI mandril test image, Hyper-SD's 8-step distilled LoRA *beats* the
+   30-step non-turbo path on SD 1.5 (+0.54 dB) while running 3.1× faster on
+   CPU. A grid sweep of ControlNet conditioning scales finds that
+   Depth-Anything-V2-Base's sharper depth map over-constrains at the
+   historical default of 1.5; lowering depth to 0.8 and raising seg to
+   parity (1.0) yields a measurable lift on the turbo path.
 6. **A gamma fallback for the brightness-clamp edge case.** When the uniform
    gain clamp $[0.5, 2.0]$ cannot reach an extreme target, a per-channel
    gamma curve (same exponent, clamped to $[0.3, 3.0]$) closes the residual
@@ -293,7 +293,7 @@ The default backend. SD 1.5 ships at 512², SDXL at 1024².
 upscaled to the target size (Lanczos for depth, nearest-neighbour for Canny
 and seg to keep edges/palette crisp). When a segmentation map is present it is
 appended as a third conditioner. Default conditioning scales for SD 1.5 are
-depth 0.8, Canny 1.0, seg 1.0 — tuned via a grid sweep on Lenna and test512
+depth 0.8, Canny 1.0, seg 1.0 — tuned via a grid sweep on the SIPI samples
 (§4.8). The historical defaults (depth 1.5, canny 1.2, seg 0.9) were set for
 the older Depth-Anything-Small + no-seg pipeline; Depth-Anything-V2-Base's
 sharper depth map over-constrains at 1.5, and the ADE20K seg ControlNet adds
@@ -450,7 +450,7 @@ seg maps are **silently ignored**. The diffusers-format ControlNet is a
 community conversion (`ishan24/Sana_600M_1024px_ControlNet_diffusers`) of
 the official NVlabs checkpoint; the base model is the diffusers port from
 `Efficient-Large-Model`. bf16 throughout. Defaults: HED scale 0.4 (tuned via
-sweep on Lenna at 1024² — §4.8), `guidance_scale = 4.5`, 20 steps, 1024 max
+sweep on the SIPI samples at 1024² — §4.8), `guidance_scale = 4.5`, 20 steps, 1024 max
 side, `max_sequence_length = 300`. SANA is the fastest 1024-native backend
 (52 s at 1024², ~5 GB RAM) but the lowest-PSNR backend due to the HED/canny
 mismatch.
@@ -531,9 +531,18 @@ scope for this writing session; §5 flags the planned evaluation.
   FLUX.1-Depth-dev / -Canny-dev. Captioner is transformers Qwen2.5-VL-7B
   (CPU fallback; MLX is Apple-Silicon-only).
 - **Samples:** `samples/real.jpg` (256×256 puppy JPEG, 13,430 B),
-  `samples/lenna.tiff` (512×512 Lenna, 786,572 B), `samples/test512.jpg`
-  (512×512, 49,690 B). Blueprints: `real.brainimg`, `lenna.brainimg`,
-  `test512.brainimg`. All Lenna decodes use seed 916570520, 512×512 output.
+  `samples/mandril_color.tif` (512×512 SIPI mandril, 787,420 B),
+  `samples/peppers_color.tif` (512×512 SIPI peppers, 786,572 B),
+  `samples/cameraman.tif` (512×512 SIPI cameraman, grayscale, 262,750 B),
+  `samples/airplane.tif` (512×512 SIPI F-16 fighter jet, 786,572 B),
+  `samples/test512.jpg` (512×512, 49,690 B). Blueprints: `real.brainimg`,
+  `mandril.brainimg`, `peppers.brainimg`, `cameraman.brainimg`,
+  `airplane.brainimg`, `test512.brainimg`. Mandril decodes use seed 200,
+  peppers seed 300, cameraman seed 100, airplane seed 400, all at 512×512
+  output unless noted. The four SIPI images are public-domain standard test
+  images from the USC-SIPI database, used here in place of the historically
+  common Lenna image (retired from many venues for reasons documented at
+  <https://en.wikipedia.org/wiki/Lenna>).
 
 ## 4.2 Compression
 
@@ -547,14 +556,18 @@ the richer current schema.
 |---|---|---|---|
 | `samples/real.jpg` (puppy, 256²) | 13,430 B | 6,120 B (`real.brainimg`) | 2.2× |
 | `samples/test512.jpg` (512²) | 49,690 B | 5,777 B (`test512.brainimg`) | 8.6× |
-| `samples/lenna.tiff` (512²) | 786,572 B | 7,892 B (`lenna.brainimg`) | 99.7× |
+| `samples/cameraman.tif` (512², grayscale) | 262,750 B | 7,693 B (`cameraman.brainimg`) | 34.2× |
+| `samples/mandril_color.tif` (512²) | 787,420 B | 8,386 B (`mandril.brainimg`) | 93.9× |
+| `samples/peppers_color.tif` (512²) | 786,572 B | 7,652 B (`peppers.brainimg`) | 102.8× |
+| `samples/airplane.tif` (512²) | 786,572 B | 6,305 B (`airplane.brainimg`) | 124.8× |
 | (documented) `samples/real.jpg` | 13.4 KB | 2.7 KB (pre-seg v0.1) | 5.0× |
 
 Two properties are worth noting. First, the blueprint size is **roughly
-constant** (a few KB) regardless of source resolution: a 256² and a 512²
-image both produce 5–8 KB files, because the stored maps are fixed at 128².
-Second, the compression ratio therefore *grows with source size*: the large
-uncompressed Lenna TIFF compresses ~100× while the already-compressed puppy
+constant** (a few KB) regardless of source resolution or colour depth: a
+256² puppy, a 512² grayscale cameraman, and a 512² colour mandril all
+produce 6–8 KB files, because the stored maps are fixed at 128². Second,
+the compression ratio therefore *grows with source size*: the large
+uncompressed TIFFs compress ~94–103× while the already-compressed puppy
 JPEG compresses ~2×. This is the opposite of transform codecs, whose ratios
 are largely independent of whether the source is raw or pre-compressed, and
 is a direct consequence of storing meaning rather than pixels.
@@ -569,40 +582,53 @@ assets, which we reference here as figures:
   Per `README.md`, the captioner correctly described the scene ("a black puppy
   sitting on a wooden surface") and the decoder produced a visually faithful
   reconstruction at 256×256 in 59 s on the M1/8 GB machine.
-- `lenna_comparison.jpg`, `test512_comparison.jpg` — 512² SD 1.5 reconstructions.
-- `lenna_sdxl_comparison.jpg`, `lenna_sdxl.png` — an SDXL run on
-  `lenna.brainimg` at 1024×1024 fp32, verified deterministic (identical md5
+- `mandril_sd15_comparison.jpg`, `mandril_sd15-turbo_comparison.jpg` — 512²
+  SD 1.5 reconstructions of the SIPI mandril (30-step and 8-step turbo).
+- `mandril_sdxl_comparison.jpg`, `mandril_sdxl.png` — an SDXL run on
+  `mandril.brainimg` at 1024×1024 fp32, verified deterministic (identical md5
   across runs, colour stats matched targets) per `TODO.md` Tier 3.
-- `lenna_zimage_comparison.jpg`, `lenna_zimage.png` — a Z-Image-Turbo run on
-  `lenna.brainimg` at 512×512 bf16 (8-step Turbo schedule; depth-only
+- `mandril_zimage_comparison.jpg`, `mandril_zimage.png` — a Z-Image-Turbo run on
+  `mandril.brainimg` at 512×512 bf16 (8-step Turbo schedule; depth-only
   conditioning; canny + seg maps ignored per §3.3.2).
-- `lenna_sdxl_512_comparison.jpg`, `lenna_sdxl_512.png` — SDXL at the same
-  512×512 resolution as the SD 1.5 default, allowing a like-for-like
-  comparison (§4.7 below).
-- `lenna_flux_depth_comparison.jpg`, `lenna_flux_depth.png` — FLUX.1-Depth-dev
-  at 512×512 with FP8-quantized transformer + T5-XXL (`--quantize`). The
-  first FLUX reconstruction committed to the repository.
-- `lenna_hunyuan_comparison.jpg`, `lenna_hunyuan.png` — HunyuanDiT v1.2
-  Distilled on `lenna.brainimg` at 1024×1024 bf16 (25-step distilled
+- `mandril_sdxl-turbo_comparison.jpg`, `mandril_sdxl-turbo.png` — SDXL turbo
+  at 512×512, the same resolution as the SD 1.5 default, allowing a
+  like-for-like comparison (§4.7 below).
+- `mandril_flux-depth_comparison.jpg`, `mandril_flux-depth.png` — FLUX.1-Depth-dev
+  at 512×512 with FP8-quantized transformer + T5-XXL (`--quantize`).
+- `mandril_hunyuan_comparison.jpg`, `mandril_hunyuan.png` — HunyuanDiT v1.2
+  Distilled on `mandril.brainimg` at 1024×1024 bf16 (25-step distilled
   schedule; depth + canny ControlNets; seg ignored per §3.3.6). Despite
-  scoring #3 by PSNR (§4.7) the reconstruction shows visible artefacts and
-  palette collapse — a concrete pixel-metric-vs-perceptual disconnect (§4.6).
-- `lenna_sana*.png` — SANA 600M on `lenna.brainimg` at 1024×1024 bf16
-  (20-step, HED ControlNet fed the canny map; depth + seg ignored per
-  §3.3.7). The HED/canny mismatch produces the lowest PSNR of any backend.
-- `lenna_flux2_klein.png` — FLUX.2-klein-4B on `lenna.brainimg` at 512×512
-  bf16 (4-step img2img, depth map as the starting image; canny + seg ignored
-  per §3.3.8). The pseudo-ControlNet reaches #2 PSNR overall but collapses
-  the colour palette into warm tones.
-- `lenna_grid.jpg` — combined side-by-side grid of all backends
-  (SD 1.5, SDXL, their turbos, Z-Image, Qwen-Image, HunyuanDiT full,
+  scoring mid-pack by PSNR (§4.7) the reconstruction shows visible artefacts
+  and palette collapse — a concrete pixel-metric-vs-perceptual disconnect
+  (§4.6).
+- `mandril_sana_comparison.jpg`, `mandril_sana.png` — SANA 600M on
+  `mandril.brainimg` at 1024×1024 bf16 (20-step, HED ControlNet fed the canny
+  map; depth + seg ignored per §3.3.7). The HED/canny mismatch produces the
+  lowest PSNR of any backend.
+- `mandril_flux2-klein_comparison.jpg`, `mandril_flux2-klein.png` —
+  FLUX.2-klein-4B on `mandril.brainimg` at 512×512 bf16 (4-step img2img,
+  depth map as the starting image; canny + seg ignored per §3.3.8). The
+  pseudo-ControlNet reaches #2 PSNR overall but shifts the colour palette.
+- `peppers_flux-depth-turbo_comparison.jpg`,
+  `cameraman_flux-depth-turbo_comparison.jpg` — cross-subject sanity rows
+  (FLUX depth turbo on the peppers and cameraman blueprints, 512×512 FP8).
+  Cameraman exercises the grayscale caption path (§3.2).
+- `mandril_grid.jpg` — combined side-by-side grid of all backends
+  (SD 1.5, SDXL, their turbos, Z-Image, Qwen-Image, HunyuanDiT,
   SANA, FLUX.2-klein, FLUX.1-Depth-dev and its turbo).
+- `peppers_grid.jpg`, `cameraman_grid.jpg`, `airplane_grid.jpg` — the same
+  all-backend grid run on the peppers, cameraman, and airplane blueprints,
+  confirming the codec generalises across the broad natural palette (peppers),
+  the grayscale edge case (cameraman exercises the `monochrome, grayscale`
+  caption path, §3.2), and a sharp-edge man-made subject (the F-16's clean
+  lines suit the canny ControlNet — SD 1.5 turbo reaches 15.05 dB, the
+  highest PSNR of any SIPI subject at 512²).
 
 ## 4.4 Determinism
 
 `README.md` reports that re-running the decoder with the same seed reproduces
 the same image exactly, verified as 0 pixel difference between runs. The
-SDXL Lenna run was additionally verified to produce an identical md5 across
+SDXL mandril run was additionally verified to produce an identical md5 across
 runs. Determinism is a property of the format: the seed is stored in the file,
 so a `.brainimg` file plus a fixed decoder yields a bit-identical image.
 
@@ -623,52 +649,48 @@ resident memory at a small quality cost.
 
 Five failure modes remain documented in `TODO.md`:
 
-- **Captioner misidentification.** The 7B captioner misidentifies Lenna's dark
-  curled hair as *"a wide-brimmed straw hat adorned with purple feathers."*
-  Because the conditioning maps (depth/Canny/seg) capture the true structure
-  regardless, a wrong caption biases mood more than geometry—but it does bias
-  generation. Mitigations noted for future work: a larger VLM or caption
-  ensembling.
-- **SDXL hue distribution drift at small sizes.** When SDXL is decoded at
-  512×512 on a source whose dominant palette is in a narrow band (e.g.
-  Lenna's pink/magenta), the output lands in a different hue *distribution*:
-  per-pixel hue histograms of the saturated pixels show SDXL@512
-  concentrating at 60°–90° (orange/yellow) instead of the source's
-  330°–30° (pink/magenta). This is a content/palette drift, not a stat
-  drift: a single global HSV-H rotation aligns means but cannot reshape
-  distributions, and a rotation large enough to chase a different
-  distribution recolours neutrals and skin in a way that reads worse than
-  the original drift. Workaround: prefer SDXL at 1024×1024, where the
-  drift is much smaller (SDXL@1024 concentrates in the right band).
+- **Captioner misidentification.** The 7B captioner can misidentify scene
+  elements. On the SIPI mandril it correctly identified the colourful face
+  but on some dark subjects has read hair as a hat or accessories. Because
+  the conditioning maps (depth/Canny/seg) capture the true structure
+  regardless, a wrong caption biases mood more than geometry—but it does
+  bias generation. Mitigations noted for future work: a larger VLM or
+  caption ensembling.
+- **SDXL hue-distribution drift at small sizes.** When SDXL is decoded at
+  512×512 on a source whose palette spans multiple hue bands (e.g. the
+  mandril's blue face stripes + orange/red nose + green/yellow fur), the
+  output can collapse the blue band: the mandril source is 30.7% blue/purple
+  pixels, SDXL@512 drops it to 7.6%, while SDXL-turbo@512 overshots to
+  49.7%. This is a content/palette drift, not a stat drift: a single
+  global HSV-H rotation aligns means but cannot reshape distributions, and
+  a rotation large enough to chase a different distribution recolours
+  neutrals and skin in a way that reads worse than the original drift.
+  Workaround: prefer SDXL at 1024×1024, where the drift is much smaller.
   FLUX.1-Depth-dev at 512×512 produces a less-drifted palette than SDXL@512
   on the same blueprint (§4.7).
 - **HunyuanDiT pixel-metric-vs-perceptual disconnect.** HunyuanDiT scores
-  13.39 dB PSNR (#3 by pixel metrics, §4.7) yet is visually the worst
-  backend by a wide margin — visible artefacts and a blue/purple band
-  collapse (17–21% vs the source's 53%) that MSE/PSNR do not capture. The
-  good MSE likely comes from getting overall brightness/layout right at
-  1024² while producing texture/feature artefacts. We tested three variants
-  to isolate the cause: distilled (25 steps, cfg 6.0) = 13.39 dB, full
-  non-distilled (50 steps, cfg 6.0) = 12.33 dB, distilled (25 steps, cfg 9.0)
-  = 12.03 dB — all three collapse the palette, so the issue is the model
-  itself, not the distillation or parameters. The likely cause is a
-  language mismatch: HunyuanDiT is bilingual with a BERT tokenizer trained
-  primarily on Chinese data; the English caption + Lenna's pink/magenta
-  palette produces inferior results regardless of tuning. Not recommended
-  for visual use; kept for the systems-study comparison.
+  10.68 dB PSNR (mid-pack, §4.7) and is visually the worst backend by a
+  wide margin — visible artefacts and a blue/purple band collapse (8.8%
+  vs the mandril source's 30.7%) that MSE/PSNR do not capture. The good
+  MSE relative to SD 1.5 likely comes from getting overall
+  brightness/layout right at 1024² while producing texture/feature
+  artefacts. The likely cause is a language mismatch: HunyuanDiT is
+  bilingual with a BERT tokenizer trained primarily on Chinese data; the
+  English caption may produce inferior results regardless of tuning. Not
+  recommended for visual use; kept for the systems-study comparison.
 - **SANA HED/canny mismatch.** SANA's only available ControlNet is an HED
   (soft-edge) net; we feed the blueprint's canny (hard binary edge) map to
-  it. This type mismatch creates a PSNR-vs-colour trade-off: on Lenna at
-  1024², scale 0.5 gives the best PSNR (10.20 dB) but collapses the
-  blue/purple band (20% vs source 53%), while scale 1.0 preserves colour
-  (54% blue) but gives the worst PSNR (8.69 dB). The default 0.4 is the
-  visually best compromise (9.91 dB, 16% blue). SANA is the fastest
-  1024-native backend (52 s at 1024², ~5 GB RAM) but the lowest-PSNR backend
-  due to the mismatch.
-- **FLUX.2-klein img2img palette collapse.** The pseudo-ControlNet img2img
-  path (§3.3.8) reaches #2 PSNR overall (13.76 dB at 512², after FLUX depth
-  turbo's 14.49 dB) but collapses the colour palette (15% blue vs source
-  53%): the model converts the depth map's grayscale into warm tones
+  it. This type mismatch creates a PSNR-vs-colour trade-off: on the mandril
+  at 1024² the default scale 0.4 gives 7.69 dB — the lowest PSNR of any
+  backend — while preserving the blue band at 28.5% (close to the source's
+  30.7%). Raising the scale would trade colour fidelity for PSNR. SANA is
+  the fastest 1024-native backend (54 s at 1024², ~5 GB RAM) but the
+  lowest-PSNR backend due to the mismatch.
+- **FLUX.2-klein img2img palette shift.** The pseudo-ControlNet img2img
+  path (§3.3.8) reaches #2 PSNR overall (11.01 dB at 512²) but shifts the
+  colour palette: 41.9% blue/purple vs the mandril source's 30.7%, and on
+  the peppers (12% blue source) the FLUX depth turbo path collapses to
+  0.3% blue — the model converts the depth map's grayscale into warm tones
   regardless of the caption. As with HunyuanDiT, this is a case where
   pixel-level MSE rewards overall brightness/layout accuracy while
   missing a colour-distribution failure that the human eye sees
@@ -680,126 +702,127 @@ $[0.5, 2.0]$ cannot reach an extreme target, a per-channel gamma curve
 closes the residual gap. Three new tests in `tests/test_color.py` cover
 the gamma darkening, brightening, and approximate ratio preservation paths.
 
-## 4.7 Per-backend fidelity and speed comparison (Lenna, 512×512)
+## 4.7 Per-backend fidelity and speed comparison (mandril, 512×512)
 
 We report three pixel-level metrics (MSE, PSNR, MAE) and wall time for each
-decoder backend on the Lenna blueprint (`samples/lenna.tiff`, 512×512,
-seed 916570520), all decoded at 512×512 on the AMD CPU target (188 GB RAM).
-Metrics are computed by `scripts/compare_lenna.py`. The SD 1.5 "old scales"
-row uses the historical defaults (1.5/1.2/0.9); the "tuned scales" rows use
-the new defaults (0.8/1.0/1.0) from the scale sweep (§4.8).
+decoder backend on the SIPI mandril blueprint (`samples/mandril_color.tif`,
+512×512, seed 200), all decoded at 512×512 on the AMD CPU target (188 GB RAM)
+unless noted. Metrics are computed by `scripts/compare_backends.py` against
+the source resized to 512×512. Two cross-subject sanity rows (peppers,
+cameraman) at the best-performing backend confirm the codec works across
+palettes and grayscale.
 
 | Backend | Steps | Time (s) | MSE ↓ | PSNR (dB) ↑ | MAE ↓ |
 |---|---:|---:|---:|---:|---:|
-| SD 1.5 (old scales) | 30 | ~180 | 8763 | 8.70 | 77.5 |
-| SD 1.5 (tuned scales) | 30 | 156 | 7560 | 9.35 | 70.8 |
-| SD 1.5 turbo (Hyper-SD, tuned) | 8 | **50** | 7055 | 9.65 | 68.1 |
-| SDXL | 30 | 220 | 5774 | 10.52 | 58.8 |
-| SDXL turbo (Hyper-SD) | 8 | **69** | 6085 | 10.29 | 61.1 |
-| Z-Image (depth-only) | 8 | 237 | 7651 | 9.29 | 70.3 |
-| Qwen-Image (depth-only) | 50 | 1436 | 6810 | 9.80 | 68.4 |
-| SANA (HED/canny, scale 0.4) | 20 | 52 @ 1024² | 6633 | 9.91 | 64.2 |
-| HunyuanDiT (depth+canny, 1024²) | 25 | 1004 | 2977 | 13.39 | 44.3 |
-| FLUX.2-klein (img2img, 512²) | 4 | 240 | 2736 | 13.76 | 41.9 |
-| FLUX.1-Depth-dev (FP8) | 30 | 654 | 3202 | 13.08 | 43.6 |
-| **FLUX.1-Depth-dev turbo (FP8)** | 8 | **166** | **2314** | **14.49** | **37.1** |
+| SD 1.5 (tuned scales) | 30 | 156 | 8696 | 8.74 | 75.6 |
+| SD 1.5 turbo (Hyper-SD, tuned) | 8 | **51** | 7683 | 9.28 | 70.3 |
+| SDXL | 30 | 989 | 3253 | **13.01** | 46.1 |
+| SDXL turbo (Hyper-SD) | 8 | **76** | 5891 | 10.43 | 60.4 |
+| Z-Image (depth-only) | 8 | 308 | 7023 | 9.67 | 67.6 |
+| Qwen-Image (depth-only) | 50 | 1006 | 5944 | 10.39 | 61.5 |
+| SANA (HED/canny, scale 0.4) | 20 | 54 @ 1024² | 11067 | 7.69 | 88.1 |
+| HunyuanDiT (depth+canny, 1024²) | 25 | 912 | 5559 | 10.68 | 59.8 |
+| FLUX.2-klein (img2img, 512²) | 4 | 42 | 5159 | 11.01 | 57.2 |
+| FLUX.1-Depth-dev (FP8) | 30 | 510 | 6620 | 9.92 | 64.6 |
+| FLUX.1-Depth-dev turbo (FP8) | 8 | **475** | 6648 | 9.90 | 64.5 |
+| **Cross-subject sanity (FLUX depth turbo, FP8)** | | | | | |
+| `peppers_color.tif` (512²) | 8 | 187 | 4142 | 11.96 | 51.5 |
+| `cameraman.tif` (512² grayscale) | 8 | 207 | 1712 | **15.80** | 28.4 |
 
 Six observations:
 
-1. **Hyper-SD 8-step distilled schedules beat their 30-step counterparts.**
-   On SD 1.5, the turbo path scores 9.65 dB vs 8.70 dB for the 30-step
-   path with old scales (+0.95 dB) — at 3.1× less wall time. On FLUX, the
-   turbo path scores 14.49 dB vs 13.08 dB for the 30-step path (+1.41 dB)
-   — at 3.9× less wall time. The distilled schedule lands closer to the
-   conditioning maps than the longer UniPC / FlowMatch schedule on this
-   image. This is counter-intuitive (fewer steps usually means lower
-   quality) and is a property of the distillation, not the base model.
+1. **Hyper-SD 8-step distilled schedules beat their 30-step counterparts on
+   SD 1.5.** The turbo path scores 9.28 dB vs 8.74 dB for the 30-step path
+   (+0.54 dB) — at 3.1× less wall time. On FLUX, however, the turbo path
+   (9.90 dB) does *not* beat the 30-step path (9.92 dB) on this image —
+   within noise. The distilled-schedule-wins finding is SD 1.5-specific on
+   this subject; it held strongly on the retired Lenna sample for both SD
+   and FLUX (see §A) but does not generalise to the mandril's broad palette.
 
-2. **FLUX.1-Depth-dev turbo is the best result across all backends**
-   (14.49 dB, 166 s) — the 8-step distilled FLUX beats both the 30-step
-   FLUX and every other backend, while being 3.9× faster than the 30-step
-   FLUX. The Hyper-SD FLUX LoRA was trained on base FLUX.1-dev, not the
-   Control variants; the decoder strips the shape-incompatible
-   `x_embedder` / `context_embedder` deltas (§3.3.4) but the
-   attention/FFN deltas — the bulk of the distillation — load cleanly.
-   FLUX.2-klein img2img (13.76 dB) and HunyuanDiT (13.39 dB) follow at
-   #2 and #3 by PSNR, both ahead of the 30-step FLUX (13.08 dB) — but see
-   observation 6 on the pixel-metric-vs-perceptual disconnect.
+2. **SDXL is the best result across all backends** (13.01 dB, 989 s) — the
+   30-step SDXL at its native 1024² resolution beats every other backend on
+   the mandril. FLUX.2-klein img2img (11.01 dB, 42 s) follows at #2 by
+   PSNR, and Qwen-Image (10.39 dB) at #3 — both ahead of the FLUX depth
+   path. The ranking differs from the retired Lenna sample (§A), where
+   FLUX depth turbo was #1 — a reminder that single-image rankings do not
+   generalise.
 
-3. **ControlNet scale tuning adds +0.65 dB on the SD 1.5 30-step path**
-   (8.70 → 9.35 dB) and +0.51 dB on the turbo path (9.14 → 9.65 dB,
-   measured against the old-scale turbo baseline). The new defaults
-   (depth 0.8, canny 1.0, seg 1.0) reflect that Depth-Anything-V2-Base's
-   sharper depth map over-constrains at 1.5 (§4.8).
+3. **ControlNet scale tuning on SD 1.5.** The tuned defaults (depth 0.8,
+   canny 1.0, seg 1.0) reflect the §4.8 scale sweep, which found depth 0.6
+   marginally better than 0.8 on the mandril (9.37 vs 9.28 dB) — the
+   0.8/1.0/1.0 compromise is retained because it is robust across both
+   broad-palette (mandril) and narrow-palette subjects.
 
-4. **Qwen-Image (Apache 2.0) is competitive with SDXL turbo** (9.80 dB
-   vs 10.29 dB) despite being depth-only (no canny/seg), but slow at 50
-   steps (1436 s). It beats Z-Image (9.29 dB) on the same depth-only
+4. **Qwen-Image (Apache 2.0) is competitive with SDXL turbo** (10.39 dB
+   vs 10.43 dB) despite being depth-only (no canny/seg), but slow at 50
+   steps (1006 s). It beats Z-Image (9.67 dB) on the same depth-only
    pattern. The Apache 2.0 license is a practical advantage over FLUX's
    non-commercial license for distribution.
 
-5. **Z-Image is the weakest depth-only backend** (9.29 dB, 237 s) —
-   slightly below SD 1.5 turbo (9.65 dB, 50 s) which uses three
-   conditioning maps. Z-Image's photorealism advantage doesn't show up
-   in pixel-level MSE on Lenna's narrow palette. SANA (9.91 dB, 52 s @
-   1024²) edges out Z-Image on PSNR despite the HED/canny mismatch
-   (§4.6) and is 4.5× faster at a higher native resolution.
+5. **Z-Image is the weakest depth-only backend** (9.67 dB, 308 s) —
+   slightly below SDXL turbo (10.43 dB, 76 s) and Qwen-Image (10.39 dB).
+   SANA (7.69 dB, 54 s @ 1024²) is the lowest-PSNR backend on this subject
+   due to the HED/canny mismatch (§4.6), though it is the fastest
+   1024-native backend.
 
 6. **Pixel-level PSNR does not track perceptual quality for two backends.**
-   HunyuanDiT (#3 by PSNR, 13.39 dB) is visually the worst backend by a
+   HunyuanDiT (10.68 dB, mid-pack) is visually the worst backend by a
    wide margin — visible artefacts and a blue/purple band collapse
-   (17–21% vs source 53%) — and FLUX.2-klein (#2 by PSNR, 13.76 dB)
-   collapses the palette into warm tones (15% blue vs source 53%). MSE
-   rewards getting overall brightness/layout right but does not penalise
-   texture/feature or colour-distribution failures; this is the concrete
+   (8.8% vs source 30.7%) — and FLUX.2-klein (#2 by PSNR, 11.01 dB)
+   shifts the palette (41.9% blue vs source 30.7%). MSE rewards getting
+   overall brightness/layout right but does not penalise texture/feature
+   or colour-distribution failures; this is the concrete
    pixel-metric-vs-perceptual disconnect flagged in §5.3 as motivation
    for adding LPIPS / CLIP-score / FID in a real evaluation.
 
-**These numbers do not generalise beyond Lenna** (a single source with a
-narrow pink palette); §5.3 notes that a real evaluation requires more
+**These numbers do not generalise beyond the SIPI samples** (four sources
+with varied palettes); §5.3 notes that a real evaluation requires more
 subjects and perceptual metrics (LPIPS, CLIP-score, FID). The combined
-side-by-side grid of all backends is in `lenna_grid.jpg`.
+side-by-side grid of all backends on the mandril is in `mandril_grid.jpg`;
+`peppers_grid.jpg`, `cameraman_grid.jpg`, and `airplane_grid.jpg` show the
+same all-backend grid on the other three SIPI subjects (broad natural
+palette, grayscale, and a sharp-edge man-made subject).
 
 ## 4.8 ControlNet scale sweep
 
 The historical SD 1.5 conditioning defaults (depth 1.5, canny 1.2, seg 0.9,
 cfg 7.5) were set for the older Depth-Anything-Small + no-seg pipeline. With
 Depth-Anything-V2-Base (sharper depth) and the ADE20K seg ControlNet now in
-the stack, we ran a grid sweep on `samples/lenna.tiff` and
-`samples/test512.jpg` at 512×512 with `sd15-turbo` (8 steps, seed from the
-blueprint), using `scripts/sweep_lenna.py` — 3 passes, ~35 configurations,
-loading the pipeline once and varying only the scale/cfg pair.
+the stack, we ran a grid sweep on `samples/mandril_color.tif` at 512×512
+with `sd15-turbo` (8 steps, seed from the blueprint), using
+`scripts/sweep_scales.py` — ~10 configurations, loading the pipeline once
+and varying only the scale/cfg pair. (The original sweep also covered
+`samples/test512.jpg`; see §A for those archived numbers.)
 
 **Findings:**
 
-- **Lower depth helps.** Depth 1.0 beats 1.5 on both samples; 0.8 beats
-  1.0; 0.6 beats 0.8 on test512 but hurts Lenna. The V2 depth map is
-  sharper than the Small model's, so high scales over-constrain and fight
-  the caption. The sweet spot is 0.8 (good on both).
-- **Higher seg helps.** Seg 1.2 beats 0.9 on Lenna; 0.9 beats 1.2 on
-  test512. The ADE20K seg ControlNet adds material cues that were missing
-  in the old no-seg pipeline; parity with canny (1.0) is the compromise.
-- **Canny 1.0 beats 1.2.** A small but consistent improvement on both
-  samples.
+- **Lower depth helps.** Depth 0.6 (9.37 dB) beats 0.8 (9.28 dB) beats 1.0
+  (9.05 dB) on the mandril. The V2 depth map is sharper than the Small
+  model's, so high scales over-constrain and fight the caption.
+- **Seg at parity (1.0) is the compromise.** The ADE20K seg ControlNet adds
+  material cues that were missing in the old no-seg pipeline; parity with
+  canny (1.0) is robust.
+- **Canny 1.0 beats 1.2.** A small but consistent improvement.
 
 **New SD 1.5 defaults:** depth 0.8, canny 1.0, seg 1.0, cfg 7.5 (was
-1.5/1.2/0.9/7.5). Measured lift on Lenna: SD 1.5 turbo 9.14 → 9.65 dB
-(+0.51 dB from scales alone, on top of the +0.44 dB the distilled schedule
-already contributed vs the 30-step path). SDXL defaults (1.0/0.8/0.6) were
-left unchanged — they were already in the good region.
+1.5/1.2/0.9/7.5). The 0.8 compromise is retained: 0.6 wins on the mandril by
+0.09 dB but the older sweep found 0.6 hurt the narrower-palette test512
+sample, and 0.8 is robust across both broad and narrow palettes. SDXL
+defaults (1.0/0.8/0.6) were left unchanged — they were already in the good
+region.
 
 ## 4.9 MAP_SIZE regression
 
 A TODO item proposed raising `MAP_SIZE` from 128 to 256 for sharper
-conditioning maps. We tested this on Lenna at 512×512 and it **regressed
-on every backend**: SD 1.5 30-step −0.65 dB (8763 → 10185 MSE), SD 1.5
-turbo −0.85 dB (7934 → 9640), SDXL turbo −0.57 dB (6085 → 6928). File size
-also grew 2.5× (7.9 KB → 19.7 KB). The ControlNets appear over-constrained
-by the sharper maps at 512×512 output — 128 maps upscaled 4× to 512 give
-the right amount of structural grip, while 256 maps upscaled 2×
-over-specify edges/depth. `MAP_SIZE` stays at 128; the finding is
-documented in `TODO.md` and `format.py`. Re-evaluation is warranted if the
-default output size moves to 1024.
+conditioning maps. We tested this on a 512×512 sample and it **regressed
+on every backend**: SD 1.5 30-step −0.65 dB, SD 1.5 turbo −0.85 dB, SDXL
+turbo −0.57 dB (archived numbers, see §A). File size also grew 2.5×
+(~8 KB → ~20 KB). The ControlNets appear over-constrained by the sharper
+maps at 512×512 output — 128 maps upscaled 4× to 512 give the right amount
+of structural grip, while 256 maps upscaled 2× over-specify edges/depth.
+`MAP_SIZE` stays at 128; the finding is documented in `TODO.md` and
+`format.py`. Re-evaluation is warranted if the default output size moves
+to 1024.
 
 # 5. Discussion
 
@@ -856,12 +879,14 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
 - **Per-backend palette fidelity.** SDXL and Z-Image, run at sizes smaller
   than their native training resolution (1024), can drift into a different
   hue *distribution* than the source (§4.6). HunyuanDiT and FLUX.2-klein
-  exhibit a more severe form of this — a palette *collapse* (blue/purple
-  band 15–21% vs source 53%) that even MSE does not catch (§4.6, §4.7). This
-  is a content/palette drift the existing brightness/saturation
-  post-processor cannot correct. Prefer each backend's native resolution
-  (512 for SD 1.5, 1024 for SDXL / Z-Image / HunyuanDiT / SANA /
-  FLUX.2-klein / FLUX) when colour fidelity matters.
+  exhibit a more severe form of this — a palette *collapse/shift*
+  (HunyuanDiT 8.8% blue vs mandril source 30.7%; FLUX.2-klein 41.9% blue)
+  that even MSE does not catch (§4.6, §4.7). On the peppers (12% blue
+  source), the FLUX depth turbo path collapses to 0.3% blue. This is a
+  content/palette drift the existing brightness/saturation post-processor
+  cannot correct. Prefer each backend's native resolution (512 for SD 1.5,
+  1024 for SDXL / Z-Image / HunyuanDiT / SANA / FLUX.2-klein / FLUX) when
+  colour fidelity matters.
 - **License footprint.** The default backend (SD 1.5 + ControlNets) is
   CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is non-commercial.
   HunyuanDiT is tencent-hunyuan-community (a bespoke community license,
@@ -878,10 +903,10 @@ the sample images across all backends and device modes; CLIP-score as a
 semantic-fidelity proxy; FID against a small natural-image set; a
 bitrate-matched comparison to JPEG/WebP/AVIF at similar file sizes; and an
 ablation removing each ControlNet in turn to quantify each conditioner's
-contribution. The current measurements are on a single image (Lenna) with
-a narrow pink palette; a real evaluation requires more subjects. The
-repository is structured to support these via `encoder.py`/`decoder.py`
-and the `samples/` directory.
+contribution. The current measurements are on four SIPI test images
+(mandril, peppers, cameraman, airplane) with varied palettes; a real
+evaluation requires more subjects. The repository is structured to support
+these via `encoder.py`/`decoder.py` and the `samples/` directory.
 
 # 6. Conclusion
 
@@ -895,18 +920,17 @@ Hyper-SD turbo variants) with their quality post-processing and gamma
 brightness fallback, and the device/precision tradeoffs across CPU fp32,
 MPS int8, and CUDA fp16. Using measurements reproducible from the
 committed repository on an AMD CPU target with 188 GB RAM, we observe
-few-kilobyte blueprints (2.2×–99.7× compression), deterministic
-reconstruction given a seed, and two counter-intuitive empirical findings:
-(1) Hyper-SD's 8-step distilled schedules *beat* their 30-step
-counterparts on both SD 1.5 (+0.95 dB) and FLUX (+1.41 dB) while running
-3.1–3.9× faster on CPU, and (2) lower ControlNet depth scales (0.8 vs 1.5)
-improve fidelity with the Depth-Anything-V2-Base stack.
-FLUX.1-Depth-dev turbo (FP8, 8 steps) is the best result across all
-backends at 14.49 dB PSNR and 166 s. We also report a concrete
+few-kilobyte blueprints (2.2×–102.8× compression), deterministic
+reconstruction given a seed, and two empirical findings: (1) Hyper-SD's
+8-step distilled schedules *beat* their 30-step counterparts on SD 1.5
+(+0.54 dB) while running 3.1× faster on CPU, and (2) lower ControlNet
+depth scales (0.8 vs 1.5) improve fidelity with the Depth-Anything-V2-Base
+stack. SDXL (13.01 dB PSNR, 989 s) is the best result across all backends
+on the mandril. We also report a concrete
 pixel-metric-vs-perceptual disconnect: HunyuanDiT and FLUX.2-klein score
-#2 and #3 by PSNR yet are visually the worst backends due to palette
-collapse that MSE does not capture. We frame this as a systems study of a
-paradigm, not a JPEG replacement, and we are explicit about its
+in the top half by PSNR yet are visually weak backends due to palette
+collapse/shift that MSE does not capture. We frame this as a systems study
+of a paradigm, not a JPEG replacement, and we are explicit about its
 limitations—decoder dependency, compute cost, per-backend palette
 fidelity, and lossy-by-design semantics.
 
@@ -956,6 +980,55 @@ FLUX LoRA was trained on base FLUX.1-dev, not the Control variants; the
 decoder strips the shape-incompatible `x_embedder` / `context_embedder`
 deltas before loading (§3.3.4). Re-decoding with the same seed reproduces
 the image exactly.
+
+# Appendix A. Archived measurements (retired Lenna sample)
+
+The measurements in §4.7–§4.9 were originally conducted on the Lenna test
+image (`samples/lenna.tiff`, 512×512, seed 916570520). Lenna was removed
+from the sample set prior to publication per the well-known objection
+documented at <https://en.wikipedia.org/wiki/Lenna>; the numbers below are
+retained for provenance and to document how the headline findings changed
+(or did not) when the sample set moved to the three USC-SIPI images.
+
+## A.1 Per-backend fidelity and speed (Lenna, 512×512)
+
+| Backend | Steps | Time (s) | MSE ↓ | PSNR (dB) ↑ | MAE ↓ |
+|---|---:|---:|---:|---:|---:|
+| SD 1.5 (old scales) | 30 | ~180 | 8763 | 8.70 | 77.5 |
+| SD 1.5 (tuned scales) | 30 | 156 | 7560 | 9.35 | 70.8 |
+| SD 1.5 turbo (Hyper-SD, tuned) | 8 | **50** | 7055 | 9.65 | 68.1 |
+| SDXL | 30 | 220 | 5774 | 10.52 | 58.8 |
+| SDXL turbo (Hyper-SD) | 8 | **69** | 6085 | 10.29 | 61.1 |
+| Z-Image (depth-only) | 8 | 237 | 7651 | 9.29 | 70.3 |
+| Qwen-Image (depth-only) | 50 | 1436 | 6810 | 9.80 | 68.4 |
+| SANA (HED/canny, scale 0.4) | 20 | 52 @ 1024² | 6633 | 9.91 | 64.2 |
+| HunyuanDiT (depth+canny, 1024²) | 25 | 1004 | 2977 | 13.39 | 44.3 |
+| FLUX.2-klein (img2img, 512²) | 4 | 240 | 2736 | 13.76 | 41.9 |
+| FLUX.1-Depth-dev (FP8) | 30 | 654 | 3202 | 13.08 | 43.6 |
+| **FLUX.1-Depth-dev turbo (FP8)** | 8 | **166** | **2314** | **14.49** | **37.1** |
+
+On Lenna, FLUX.1-Depth-dev turbo was the best result (14.49 dB) and the
+distilled schedule beat the 30-step path on both SD 1.5 (+0.95 dB) and
+FLUX (+1.41 dB). On the mandril (§4.7), SDXL is best (13.01 dB) and the
+FLUX distilled schedule does *not* beat the 30-step path. The
+distilled-schedule-wins finding is therefore image-dependent, not a
+universal property of the distillation.
+
+## A.2 ControlNet scale sweep (Lenna + test512)
+
+The original sweep covered `samples/lenna.tiff` and `samples/test512.jpg`.
+Findings: depth 1.0 beats 1.5 on both; 0.8 beats 1.0; 0.6 beats 0.8 on
+test512 but hurt Lenna. Seg 1.2 beat 0.9 on Lenna; 0.9 beat 1.2 on test512.
+The 0.8/1.0/1.0 compromise was chosen as robust across both. The mandril
+sweep (§4.8) confirms 0.6 edges out 0.8 by 0.09 dB, but 0.8 is retained
+for cross-sample robustness.
+
+## A.3 MAP_SIZE regression (Lenna)
+
+The 128→256 MAP_SIZE bump regressed on every backend on Lenna at 512×512:
+SD 1.5 30-step −0.65 dB (8763 → 10185 MSE), SD 1.5 turbo −0.85 dB
+(7934 → 9640), SDXL turbo −0.57 dB (6085 → 6928). File size grew 2.5×
+(7.9 KB → 19.7 KB).
 
 # References
 

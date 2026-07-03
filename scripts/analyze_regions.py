@@ -1,19 +1,24 @@
 """Per-region color analysis: segment the source by color regions, then
 measure brightness/saturation/hue per region across all reconstructions.
 
-Uses the ADE20K segmentation map stored in lenna.brainimg as a mask. Groups
-adjacent ADE20K class colors into larger semantic regions (skin, hair, face,
-background, fabric) by hand-tuned color matching -- the seg map is palette
-colorized, so a quick nearest-color lookup is enough for Lenna.
+Uses the ADE20K segmentation map stored in <sample>.brainimg as a mask.
+Groups adjacent ADE20K class colors into larger semantic regions (skin, hair,
+face, background, fabric) by hand-tuned color matching -- the seg map is
+palette colorized, so a quick nearest-color lookup is enough for most samples.
 
 Output: a table per reconstruction showing how each region's hue/brightness/
 saturation compares to the source.
+
+Usage:
+    python scripts/analyze_regions.py mandril
+    python scripts/analyze_regions.py peppers
 """
 from __future__ import annotations
 
 import base64
 import io
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -103,28 +108,52 @@ def _circular_delta(a: float, b: float) -> float:
 
 
 def main() -> int:
-    src = Image.open("samples/lenna.tiff").convert("RGB")
-    src_512 = src.resize((512, 512), Image.LANCZOS)
+    import argparse
 
-    bi = load_brainimg("lenna.brainimg")
+    parser = argparse.ArgumentParser(
+        description="Per-region color analysis across reconstructions of a sample."
+    )
+    parser.add_argument("sample", help="sample name (e.g. mandril, peppers, cameraman)")
+    parser.add_argument(
+        "--size", type=int, default=512, help="comparison size (default: 512)"
+    )
+    args = parser.parse_args()
+
+    src_path = None
+    for cand in (args.sample, f"{args.sample}_color", f"{args.sample}_gray"):
+        for ext in (".tif", ".tiff", ".jpg", ".jpeg", ".png"):
+            p = Path("samples") / f"{cand}{ext}"
+            if p.exists():
+                src_path = str(p)
+                break
+        if src_path:
+            break
+    if src_path is None:
+        print(f"unknown sample: {args.sample} (no samples/{args.sample}*.*)", file=sys.stderr)
+        return 2
+
+    size = (args.size, args.size)
+    src = Image.open(src_path).convert("RGB")
+    src_resized = src.resize(size, Image.LANCZOS)
+
+    blueprint = f"{args.sample}.brainimg"
+    bi = load_brainimg(blueprint)
     if not bi.segmentation_map_b64:
-        print("lenna.brainimg has no segmentation_map_b64; nothing to analyze.")
+        print(f"{blueprint} has no segmentation_map_b64; nothing to analyze.")
         return 1
     seg_img = Image.open(io.BytesIO(base64.b64decode(bi.segmentation_map_b64)))
 
-    mask = _seg_to_mask(seg_img, src_512.size)
+    mask = _seg_to_mask(seg_img, src_resized.size)
     regions_present = sorted(set(mask.ravel()))
-    print(f"source size: {src_512.size}, regions in seg: {len(regions_present)}")
+    print(f"source size: {src_resized.size}, regions in seg: {len(regions_present)}")
     print("  region pixel counts: " + ", ".join(
         f"{r}={int((mask == r).sum())}" for r in regions_present
     ))
 
+    from scripts.compare_backends import DEFAULT_BACKENDS
     decodes = [
-        ("SD15  512 existing",  "lenna_recon.png"),
-        ("SDXL 1024 existing",  "lenna_sdxl.png"),
-        ("SDXL  512 existing",  "lenna_sdxl_512.png"),
-        ("SDXL  512 fixed-prom", "lenna_sdxl_fixed_prompt.png"),
-        ("SDXL  512 hue-fix",   "lenna_sdxl_512_with_hue.png"),
+        (label, f"{args.sample}_{suffix}.png")
+        for label, suffix in DEFAULT_BACKENDS
     ]
 
     print()
@@ -135,10 +164,10 @@ def main() -> int:
         if not Path(path).exists():
             print(f"{label}: missing")
             continue
-        img = Image.open(path).convert("RGB").resize((512, 512), Image.LANCZOS)
+        img = Image.open(path).convert("RGB").resize(size, Image.LANCZOS)
         print(f"\n{label}  ({path})")
         for region in regions_present:
-            src_s = _region_stats(src_512, mask, region)
+            src_s = _region_stats(src_resized, mask, region)
             out_s = _region_stats(img, mask, region)
             if src_s is None or out_s is None:
                 continue

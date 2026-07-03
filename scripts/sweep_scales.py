@@ -1,11 +1,12 @@
-"""Sweep ControlNet scales + CFG on Lenna to find better defaults.
+"""Sweep ControlNet scales + CFG on a sample to find better defaults.
 
 Loads the SD 1.5 turbo pipeline once and runs multiple inferences with
 different depth/canny/seg/cfg combinations, printing MSE/PSNR/MAE for each.
 Reuses the same blueprint + seed so the only variable is the scale/cfg pair.
 
 Usage:
-    python scripts/sweep_lenna.py
+    python scripts/sweep_scales.py mandril
+    python scripts/sweep_scales.py test512
 """
 from __future__ import annotations
 
@@ -40,18 +41,24 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Sweep ControlNet scales on a sample.")
-    parser.add_argument("sample", nargs="?", default="lenna", help="sample name (lenna or test512)")
+    parser.add_argument(
+        "sample", help="sample name (e.g. mandril, peppers, cameraman, test512)"
+    )
     args = parser.parse_args()
 
-    if args.sample == "lenna":
-        src_path = "samples/lenna.tiff"
-        blueprint = "lenna.brainimg"
-    elif args.sample == "test512":
-        src_path = "samples/test512.jpg"
-        blueprint = "test512.brainimg"
-    else:
-        print(f"unknown sample: {args.sample}", file=sys.stderr)
+    src_path = None
+    for cand in (args.sample, f"{args.sample}_color", f"{args.sample}_gray"):
+        for ext in (".tif", ".tiff", ".jpg", ".jpeg", ".png"):
+            p = Path("samples") / f"{cand}{ext}"
+            if p.exists():
+                src_path = str(p)
+                break
+        if src_path:
+            break
+    if src_path is None:
+        print(f"unknown sample: {args.sample} (no samples/{args.sample}*.*)", file=sys.stderr)
         return 2
+    blueprint = f"{args.sample}.brainimg"
 
     src = Image.open(src_path).convert("RGB").resize((512, 512), Image.LANCZOS)
     src_arr = np.array(src)
@@ -70,21 +77,21 @@ def main() -> int:
 
     # The sweep grid: (label, depth, canny, seg, cfg)
     # Final-pass compromise grid: depth 0.6-1.0, canny 1.0-1.2, seg 0.9-1.2, cfg 7.5.
-    # Lenna winner: (1.0/1.0/1.2/7.5); test512 winner: (0.6/1.2/1.2/7.5).
-    # Pick scales that work well on both.
+    # Archived (retired) sample winner: (1.0/1.0/1.2/7.5); test512 winner:
+    # (0.6/1.2/1.2/7.5). Pick scales that work well on both.
     sweep = [
-        ("Lenna winner (1.0/1.0/1.2/7.5)", 1.0, 1.0, 1.2, 7.5),
-        ("test512 winner (0.6/1.2/1.2/7.5)", 0.6, 1.2, 1.2, 7.5),
+        ("d1.0 seg1.2 (1.0/1.0/1.2/7.5)", 1.0, 1.0, 1.2, 7.5),
+        ("d0.6 seg1.2 (0.6/1.2/1.2/7.5)", 0.6, 1.2, 1.2, 7.5),
         # Compromise: depth 0.8 (between the two winners).
         ("compromise (0.8/1.0/1.2/7.5)", 0.8, 1.0, 1.2, 7.5),
         ("compromise (0.8/1.2/1.2/7.5)", 0.8, 1.2, 1.2, 7.5),
         # Seg 1.0 (middle of 0.9 vs 1.2 split).
         ("compromise (0.8/1.0/1.0/7.5)", 0.8, 1.0, 1.0, 7.5),
         ("compromise (0.8/1.2/1.0/7.5)", 0.8, 1.2, 1.0, 7.5),
-        # Keep depth at 1.0 (Lenna winner) but seg 1.0 (middle).
+        # Keep depth at 1.0 but seg 1.0 (middle).
         ("d1.0 seg1.0 (1.0/1.0/1.0/7.5)", 1.0, 1.0, 1.0, 7.5),
         ("d1.0 seg1.0 (1.0/1.2/1.0/7.5)", 1.0, 1.2, 1.0, 7.5),
-        # Depth 0.6 (test512 winner) with seg 1.0 (middle).
+        # Depth 0.6 with seg 1.0 (middle).
         ("d0.6 seg1.0 (0.6/1.0/1.0/7.5)", 0.6, 1.0, 1.0, 7.5),
         ("d0.6 seg1.0 (0.6/1.2/1.0/7.5)", 0.6, 1.2, 1.0, 7.5),
     ]

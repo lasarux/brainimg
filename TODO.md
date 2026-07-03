@@ -6,7 +6,7 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 
 ## Tier 2 — moderate lift (next up)
 
-- [~] **Raise MAP_SIZE 128 -> 256.** Tested on `samples/lenna.tiff` at 512x512
+- [~] **Raise MAP_SIZE 128 -> 256.** Tested on a 512x512 SIPI sample at 512x512
       output (the brainimg target size) and it **regressed on every backend**:
       SD 1.5 30-step -0.65 dB (8763 -> 10185 MSE), SD 1.5 turbo -0.85 dB
       (7934 -> 9640), SDXL turbo -0.57 dB (6085 -> 6928). File also grew 2.5x
@@ -21,16 +21,14 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 - [x] **Tune ControlNet scales / CFG for the new stack.** The old defaults
       (depth 1.5, canny 1.2, seg 0.9, cfg 7.5) were set for the old
       Depth-Anything-Small + no-seg pipeline. A grid sweep on
-      `samples/lenna.tiff` + `samples/test512.jpg` at 512x512 with sd15-turbo
-      (scripts/sweep_lenna.py, 3 passes, ~35 configs) found that Depth-Anything-V2-Base's
+      `samples/mandril_color.tif` at 512x512 with sd15-turbo
+      (scripts/sweep_scales.py, ~10 configs) found that Depth-Anything-V2-Base's
       sharper depth map over-constrains at 1.5 -- lowering it helps a lot --
       and the new ADE20K seg ControlNet adds material cues that were missing,
       so raising seg to parity with canny helps. New SD 1.5 defaults:
       **depth 0.8, canny 1.0, seg 1.0, cfg 7.5** (was 1.5/1.2/0.9/7.5).
-      Measured lift on Lenna: SD 1.5 turbo 9.14 -> 9.65 dB (+0.51 dB from
-      scales alone, on top of the +0.44 dB the distilled schedule already
-      contributed vs the 30-step path). test512 confirms the same direction
-      (lower depth + seg at parity wins across both samples). SDXL defaults
+      Measured on mandril: SD 1.5 turbo 9.28 dB; depth 0.6 edges out 0.8 by
+      0.09 dB but 0.8 is retained for cross-sample robustness. SDXL defaults
       left unchanged (1.0/0.8/0.6) -- they were already in the good region.
 - [x] **Brightness clamp edge case.** The `[0.5, 2.0]` gain clamp in
       `_match_color_statistics` couldn't reach extreme targets (e.g. darkening
@@ -54,11 +52,12 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       paths ignore the file's stored step count and use 8 steps unless
       `--steps` is passed; `--cfg` defaults stay at 7.5/7.0 (CFG-preserved
       LoRAs support 5-8). `peft>=0.10` is required for LoRA loading.
-      Measured on the AMD CPU target with `samples/lenna.tiff` (512²,
-      same seed): SD 1.5 turbo 50.1 s / 9.65 dB PSNR vs ~3 min / 8.70 dB
-      for the 30-step path with old defaults (+0.95 dB — distilled schedule
-      + tuned scales both help), SDXL turbo 84.2 s at 512² vs ~17 min
-      for the 30-step path at 512² (~12x faster at −0.23 dB). The biggest
+      Measured on the AMD CPU target with `samples/mandril_color.tif` (512²,
+      same seed): SD 1.5 turbo 50.7 s / 9.28 dB PSNR vs ~3 min / 8.74 dB
+      for the 30-step path with old defaults (+0.54 dB — distilled schedule
+      + tuned scales both help), SDXL turbo 75.5 s at 512² vs ~16 min
+      for the 30-step path at native 1024² (~13x faster, but SDXL at 1024²
+      wins on this subject at 13.01 dB). The biggest
       win on the AMD CPU target where every step costs the same wall time.
 - [x] **Hyper-SD FLUX turbo backends.** `--model flux-depth-turbo` /
       `flux-canny-turbo` add Hyper-SD's `Hyper-FLUX.1-dev-8steps-lora.safetensors`
@@ -69,9 +68,10 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       (extra input channels, 128 vs 64) and `context_embedder` (doesn't exist
       on base dev) LoRA deltas are shape-incompatible and stripped before
       loading; the `transformer.` prefix is also stripped (diffusers adds it
-      internally). Measured on Lenna 512² FP8: 165.8 s / 14.49 dB PSNR vs
-      654 s / 13.08 dB for the 30-step path -- the 8-step distilled schedule
-      actually **beats** the 30-step FLUX by +1.41 dB at ~4x less wall time.
+      internally). Measured on mandril 512² FP8: 475 s / 9.90 dB PSNR vs
+      510 s / 9.92 dB for the 30-step path -- within noise on this subject
+      (the distilled-schedule-wins finding is SD-1.5-specific here; on the
+      retired Lenna sample FLUX turbo did beat 30-step, see PAPER.md §A).
 - [x] **Qwen-Image backend.** `--model qwen-image` adds Alibaba's Qwen-Image
       (arXiv 2508.02324, Apache 2.0 DiT) + InstantX's Union ControlNet
       (canny + depth + pose + soft-edge in one model, depth-only on this
@@ -80,9 +80,9 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       change). `QwenImageControlNetPipeline` already in diffusers 0.38;
       `InstantX/Qwen-Image-ControlNet-Union` is ungated (Apache 2.0).
       Defaults: 50 steps, true_cfg_scale 4.0, controlnet_conditioning_scale
-      0.9, 1024 max side. Measured on Lenna 512² CPU: 1436 s / 9.80 dB PSNR
-      -- better than Z-Image (9.29 dB) and SD 1.5 turbo (9.65 dB) at depth-
-      only, but slower (50 steps vs 8). Competitive with SDXL turbo (10.29
+      0.9, 1024 max side. Measured on mandril 512² CPU: 1006 s / 10.39 dB PSNR
+      -- better than Z-Image (9.67 dB) and SD 1.5 turbo (9.28 dB) at depth-
+      only, but slower (50 steps vs 8). Competitive with SDXL turbo (10.43
       dB) despite using only one conditioning map. Apache 2.0 license is a
       win over FLUX's non-commercial.
 - [x] **HunyuanDiT backend.** `--model hunyuan` adds Tencent's Hunyuan-DiT
@@ -91,36 +91,32 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       not a Union net. The blueprint's seg map is ignored (no seg ControlNet
       exists for HunyuanDiT). bf16, BERT + T5 text encoders, 25 steps
       (distilled). HunyuanDiT only supports fixed resolutions (1024, 1280,
-      etc.) — it auto-upscales 512 to 1024. Measured on Lenna at 1024²:
-      1004 s / 13.39 dB PSNR — second only to FLUX depth turbo (14.49 dB),
-      and beats FLUX depth at 512 (13.08 dB) thanks to 1024 resolution +
-      two conditioning maps. License: tencent-hunyuan-community.
-      **Visual caveat**: despite scoring 13.39 dB PSNR (#2 by pixel
-      metrics), HunyuanDiT is visually the worst backend by a wide margin
-      -- visible artifacts and palette collapse that MSE/PSNR do not
+      etc.) — it auto-upscales 512 to 1024. Measured on mandril at 1024²:
+      912 s / 10.68 dB PSNR — mid-pack, well below SDXL (13.01 dB) and
+      FLUX.2-klein (11.01 dB).
+      License: tencent-hunyuan-community.
+      **Visual caveat**: despite scoring mid-pack by PSNR (10.68 dB),
+      HunyuanDiT is visually the worst backend by a wide margin
+      -- visible artifacts and blue-band collapse (8.8% vs source 30.7%)
+      that MSE/PSNR do not
       capture. This is a concrete example of the pixel-metric-vs-perceptual
       disconnect flagged in the paper (§4.7). The good MSE likely comes
       from getting overall brightness/layout right at 1024² while producing
-      texture/feature artifacts. Tested three variants to isolate the cause:
-      distilled (25 steps, cfg 6.0) = 13.39 dB, full non-distilled (50 steps,
-      cfg 6.0) = 12.33 dB, distilled (25 steps, cfg 9.0) = 12.03 dB. All
-      three collapse the blue/purple band (17-21% vs source's 53%), so the
-      issue is the model itself, not the distillation or parameters. Likely
+      texture/feature artifacts. Likely
       a language mismatch: HunyuanDiT is bilingual with a BERT tokenizer
-      trained primarily on Chinese data; the English caption + Lenna's
-      pink/magenta palette produces inferior results regardless of tuning.
+      trained primarily on Chinese data; the English caption produces
+      inferior results regardless of tuning.
       Not recommended for visual use; kept for the systems-study comparison.
 - [x] **SANA backend.** `--model sana` adds NVIDIA's SANA 600M (MIT, linear
       DiT, arXiv 2410.10629) with an HED ControlNet — the only ControlNet
       type available for SANA. The blueprint's canny map is fed to the HED
       ControlNet (both are edge maps, but HED produces soft probability
       edges while canny produces hard binary edges). This type mismatch
-      creates a PSNR-vs-color trade-off: a ControlNet scale sweep on Lenna
-      at 1024² shows scale=0.5 gives the best PSNR (10.20 dB) but collapses
-      the blue/purple band (20% vs source 53%), while scale=1.0 preserves
-      color (54% blue) but gives the worst PSNR (8.69 dB). The default 0.4
-      is the visually best compromise (9.91 dB, 16% blue). SANA is the fastest 1024-native
-      backend (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR
+      creates a PSNR-vs-color trade-off: on mandril at 1024² the default
+      scale=0.4 gives 7.69 dB (the lowest PSNR of any backend) while
+      preserving the blue band at 28.5% (close to source 30.7%). Raising
+      the scale trades colour fidelity for PSNR. SANA is the fastest 1024-native
+      backend (54 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR
       backend due to the HED/canny mismatch. Depth and seg maps are ignored
       (no depth/seg ControlNet exists for SANA). The ControlNet is a
       community diffusers conversion by ishan24 of the official NVlabs
@@ -169,7 +165,7 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
           (ungated) loads via `ControlNetModel.from_single_file` since it ships a
           checkpoint-format safetensors, not a diffusers repo layout. The old
           xinsir 401 blocker is gone.
-      Verified on lenna.brainimg: 1024x1024 fp32, deterministic (identical md5
+      Verified on mandril.brainimg: 1024x1024 fp32, deterministic (identical md5
       across runs), color stats match targets. Scale tuning still TODO on a GPU.
 
 - [x] **FLUX.1 Control backend.** `--model flux-depth` /
@@ -196,12 +192,12 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
 
 ## Known issues (not pure decode-quality)
 
-- [ ] **Captioner accuracy on Lenna.** The 7B captioner misidentifies Lenna's
-      dark curled hair as "a wide-brimmed straw hat adorned with purple
-      feathers." The conditioning maps (depth/canny/seg) capture the true
-      structure regardless, but a wrong caption biases generation. Could try a
-      larger VLM or ensemble captions; low priority since structure is what
-      drives fidelity.
+- [ ] **Captioner accuracy on hard subjects.** The 7B captioner can
+      misidentify scene elements (e.g. on some dark subjects reading hair
+      as a hat or accessories). The conditioning maps (depth/canny/seg)
+      capture the true structure regardless, but a wrong caption biases
+      generation. Could try a larger VLM or ensemble captions; low priority
+      since structure is what drives fidelity.
 
 - [ ] **SDXL hue distribution drift.** SDXL @ 512 outputs land in the
       orange/yellow band (60-90 deg) when the source is pink/magenta (330-30

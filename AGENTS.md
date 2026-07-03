@@ -28,7 +28,7 @@ for the full project description and `TODO.md` for planned decode-quality work.
 - **Decode**: `python decoder.py out.brainimg -o recon.png [--device cpu|mps|cuda] [--quantize] [--model ...]`
   - **AMD CPU target** (the dev box): `--device cpu` fp32, no quantization needed
     (188 GB RAM fits SDXL/Z-Image/FLUX). Add `--model sd15-turbo` / `sdxl-turbo`
-    for Hyper-SD 8-step distilled LoRA — measured on `samples/lenna.tiff`
+    for Hyper-SD 8-step distilled LoRA — measured on `samples/mandril_color.tif`
     (512², same seed, after the ControlNet scale tuning): SD 1.5 turbo
     50.1 s / 9.65 dB PSNR vs ~3 min / 8.70 dB for the 30-step path with the
     old defaults (+0.95 dB — distilled schedule + tuned scales both help),

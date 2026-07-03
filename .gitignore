@@ -27,55 +27,18 @@ out/
 recon.jpg
 recon_*.jpg
 recon_*.png
-# Generated side-by-side comparisons and Lenna test outputs (not tracked).
-lenna_recon.png
-lenna_comparison.jpg
-lenna.brainimg
-# Recent Lenna SDXL/SD15/Z-Image sweep artifacts and patched blueprint copies.
-lenna_sd15_dtype_check.png
-lenna_sdxl.png
-lenna_sdxl_512.png
-lenna_sdxl_512_comparison.jpg
-lenna_sdxl_512_with_hue.png
-lenna_sdxl_512_with_hue_comparison.jpg
-lenna_sdxl_comparison.jpg
-lenna_sdxl_fixed_prompt.png
-lenna_fixed_prompt.brainimg
-lenna_with_hue.brainimg
-# FLUX smoke-test artifacts
-lenna_flux_depth.png
-lenna_flux_canny.png
-lenna_flux_depth_comparison.jpg
-lenna_flux_canny_comparison.jpg
-# Hyper-SD turbo decode artifacts
-lenna_sd15_turbo.png
-lenna_sdxl_turbo.png
-lenna_sd15_turbo_comparison.jpg
-lenna_sdxl_turbo_comparison.jpg
-# Full-backend Lenna sweep artifacts (512x512, new scales)
-lenna_sd15_new_scales.png
-lenna_sd15_new_scales_comparison.jpg
-lenna_sdxl_512_new_scales.png
-lenna_sdxl_512_new_scales_comparison.jpg
-lenna_zimage_comparison.jpg
-lenna_flux_depth_comparison.jpg
-# Hyper-SD FLUX turbo artifacts
-lenna_flux_depth_turbo.png
-lenna_flux_depth_turbo_comparison.jpg
-# Qwen-Image decode artifacts
-lenna_qwen_image.png
-lenna_qwen_image_comparison.jpg
-# SANA decode artifacts
-lenna_sana*.png
-
-# FLUX.2-klein decode artifacts
-lenna_flux2_klein*.png
-
-# HunyuanDiT decode artifacts
-lenna_hunyuan.png
-lenna_hunyuan_comparison.jpg
-lenna_hunyuan_full.png
-lenna_hunyuan_cfg9.png
+# Generated side-by-side comparisons and per-backend reconstruction outputs.
+# These are produced by decoder.py / scripts and are not tracked.
+*_comparison.jpg
+*_grid.jpg
+*_recon.png
+# Per-backend reconstruction PNGs (e.g. mandril_sd15.png, peppers_zimage.png).
+# These are large decoder outputs, not source — do not track.
+mandril_*.png
+peppers_*.png
+cameraman_*.png
+airplane_*.png
+test512_recon.png
 
 # OS
 .DS_Store

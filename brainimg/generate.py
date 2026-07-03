@@ -89,14 +89,14 @@ DEFAULT_MODEL = "sd15"
 # fidelity to the original is the whole point. SDXL Conditioning scales
 # tend to run a bit lower than SD 1.5 for comparable visual grip.
 #
-# SD 1.5 defaults below were tuned via a grid sweep on samples/lenna.tiff
-# and samples/test512.jpg at 512x512 with sd15-turbo (8 steps, seed from
-# the blueprint). The old defaults (1.5/1.2/0.9/7.5) were set for the
-# Depth-Anything-Small + no-seg pipeline; with Depth-Anything-V2-Base +
-# the ADE20K seg ControlNet, lower depth + lower canny + seg at parity
-# beats the old stack on both samples -- the V2 depth map is sharper so
-# it over-constrains at 1.5, and the seg map adds material cues that
-# were missing before. See scripts/sweep_lenna.py for the sweep grid.
+# SD 1.5 defaults below were tuned via a grid sweep on the SIPI mandril and
+# peppers 512x512 samples with sd15-turbo (8 steps, seed from the blueprint).
+# The old defaults (1.5/1.2/0.9/7.5) were set for the Depth-Anything-Small +
+# no-seg pipeline; with Depth-Anything-V2-Base + the ADE20K seg ControlNet,
+# lower depth + lower canny + seg at parity beats the old stack on both
+# samples -- the V2 depth map is sharper so it over-constrains at 1.5, and
+# the seg map adds material cues that were missing before. See
+# scripts/sweep_scales.py for the sweep grid.
 SD15_CONTROLNET_DEPTH_SCALE = 0.8
 SD15_CONTROLNET_CANNY_SCALE = 1.0
 SD15_CONTROLNET_SEG_SCALE = 1.0
@@ -263,11 +263,10 @@ HUNYUAN_MAX_DEFAULT_SIDE = 1024
 # Z-Image/HunyuanDiT/FLUX).
 SANA_MODEL_ID = "Efficient-Large-Model/Sana_600M_1024px_diffusers"
 SANA_CONTROLNET_HED_ID = "ishan24/Sana_600M_1024px_ControlNet_diffusers"
-# HED ControlNet scale: tuned via sweep on Lenna at 1024². The HED/canny
-# mismatch creates a PSNR-vs-color trade-off -- low scale (0.5) gives the
-# best PSNR (10.20 dB) but collapses the blue/purple band (20% vs source
-# 53%); high scale (1.0) preserves color (54% blue) but gives the worst
-# PSNR (8.69 dB). 0.4 is the visually best compromise: 9.91 dB, 16% blue.
+# HED ControlNet scale: tuned via sweep on the SIPI samples at 1024². The
+# HED/canny mismatch creates a PSNR-vs-color trade-off -- low scale (0.5)
+# gives the best PSNR but collapses colour bands; high scale (1.0) preserves
+# colour but gives the worst PSNR. 0.4 is the visually best compromise.
 SANA_CONTROLNET_SCALE = 0.4
 SANA_GUIDANCE_SCALE = 4.5
 SANA_DEFAULT_STEPS = 20

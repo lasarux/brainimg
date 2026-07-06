@@ -127,6 +127,17 @@ for the full project description and `TODO.md` for planned decode-quality work.
   shape-mismatch ValueError. The full `2.1-8steps` file (~6.4 GB, 5 control
   types) loads cleanly and is what the code pins. Re-evaluate if a future
   diffusers release adds the lite configs.
+- **HunyuanDiT size handling + CPU bf16 black frame**: by default `--model
+  hunyuan` / `hunyuan-full` honors `--size` exactly (diffusers'
+  `use_resolution_binning=False`). HunyuanDiT was trained at 1024²; running
+  it at 512² is off-distribution (PSNR drops ~1-2 dB) but ~4× faster, which
+  is what CPU iteration needs. Pass `--bin-resolution` to let diffusers
+  remap to the nearest trained shape (e.g. 512² → 1024²). The non-distilled
+  `hunyuan-full` variant can emit a black/NaN frame under bf16 on CPU
+  (the distilled path has not been observed to); `_generate_hunyuan`
+  detects this and retries once at fp32 (~2× RAM/runtime, numerically
+  safe) — the same recovery philosophy as the SD 1.5 MPS fp16-NaN handling,
+  applied to CPU bf16.
 - **SANA HED/canny mismatch**: `--model sana` uses NVIDIA's SANA 600M (MIT,
   linear DiT) with an HED (soft-edge) ControlNet — the only ControlNet type
   available for SANA. The blueprint's canny map is fed to the HED ControlNet

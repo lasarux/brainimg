@@ -953,20 +953,27 @@ def _build_qwen_image_pipeline(device: str):
     return pipe, torch
 
 
-def _build_hunyuan_pipeline(device: str, model: str = "hunyuan"):
+def _build_hunyuan_pipeline(
+    device: str, model: str = "hunyuan", dtype=None
+):
     """Construct the HunyuanDiT + depth/canny ControlNet pipeline.
 
     Same architectural pattern as SD 1.5/SDXL: two separate ControlNet
     models (depth + canny), not a Union net. Uses the v1.2 Distilled variant
-    (25-step generation). bf16 throughout (HunyuanDiT's native dtype,
-    sidesteps the MPS fp16 NaN bug). The blueprint's seg map is ignored
-    (no seg ControlNet exists for HunyuanDiT) -- no schema change.
+    (25-step generation) by default; ``model="hunyuan-full"`` selects the
+    non-distilled base (50 steps). bf16 throughout (HunyuanDiT's native
+    dtype, sidesteps the MPS fp16 NaN bug). The blueprint's seg map is
+    ignored (no seg ControlNet exists for HunyuanDiT) -- no schema change.
+
+    ``dtype`` overrides the load dtype (default bf16). The CPU fp32 fallback
+    for the black/NaN frame case passes ``torch.float32`` here and gets a
+    ~2x slower but numerically safe decode.
 
     Memory strategy mirrors Z-Image/Qwen-Image:
       * cuda: ``pipe.to("cuda")``.
       * mps:  ``enable_model_cpu_offload()``.
       * cpu:  ``pipe.to("cpu")`` -- resident in host RAM (~12 GB bf16 for
-        the distilled DiT + 2 ControlNets).
+        the distilled DiT + 2 ControlNets; ~24 GB fp32).
 
     Returns ``(pipe, torch)``.
     """
@@ -977,7 +984,7 @@ def _build_hunyuan_pipeline(device: str, model: str = "hunyuan"):
     )
 
     cfg = _model_config(model)
-    load_dtype = torch.bfloat16
+    load_dtype = dtype if dtype is not None else torch.bfloat16
 
     controlnets = [
         HunyuanDiT2DControlNetModel.from_pretrained(cfg["depth_id"], torch_dtype=load_dtype),
@@ -1228,6 +1235,7 @@ def generate_image(
     canny_scale: float | None = None,
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
+    bin_resolution: bool = False,
 ) -> Image.Image:
     """Regenerate a single image from *data*.
 
@@ -1247,6 +1255,10 @@ def generate_image(
         model: "sd15" (default), "sdxl", "zimage", "flux-depth", or
             "flux-canny". SDXL/FLUX both trained at 1024. FLUX is bf16 and
             takes a single depth OR canny conditioning image (not both).
+        bin_resolution: HunyuanDiT-only. When False (default) the requested
+            ``size`` is honored exactly; when True diffusers remaps it to
+            the nearest trained shape (e.g. 512x512 -> 1024x1024). Ignored
+            by all other backends.
     """
     if model == "zimage":
         return _generate_zimage(
@@ -1276,6 +1288,7 @@ def generate_image(
             depth_scale=depth_scale,
             canny_scale=canny_scale,
             model=model,
+            bin_resolution=bin_resolution,
         )
     if model == "sana":
         return _generate_sana(
@@ -1518,13 +1531,26 @@ def _generate_hunyuan(
     depth_scale: float | None,
     canny_scale: float | None,
     model: str = "hunyuan",
+    bin_resolution: bool = False,
 ) -> Image.Image:
     """HunyuanDiT path: depth + canny ControlNets (two separate nets).
 
     Same conditioning pattern as SD 1.5/SDXL: depth + canny, no seg (HunyuanDiT
     has no seg ControlNet). ``model`` selects the base: "hunyuan" (v1.2
     Distilled, 25 steps) or "hunyuan-full" (v1.2 non-distilled, 50 steps).
+
+    ``bin_resolution`` controls diffusers' ``use_resolution_binning``: when
+    False (default) the requested ``--size`` is honored exactly (e.g. 512x512),
+    which is off-distribution for HunyuanDiT (trained at 1024) but ~4x faster
+    and matches the user's explicit request. When True, diffusers remaps the
+    requested shape to the nearest trained shape (e.g. 512x512 -> 1024x1024).
+
+    CPU bf16 can produce a black/NaN frame on the non-distilled variant; if
+    that happens we rebuild the pipeline at fp32 and retry once (same
+    philosophy as the SD 1.5 MPS fp16-NaN handling, applied to CPU bf16).
     """
+    import numpy as np
+
     device = device_override or get_torch_device()
     cfg = _model_config(model)
 
@@ -1545,25 +1571,43 @@ def _generate_hunyuan(
 
     pipe, torch = _build_hunyuan_pipeline(device, model=model)
 
-    # HunyuanDiT uses a BERT tokenizer; the CLIP 77-token limit doesn't apply
-    # but we keep the style prefix gating for consistency (BERT can handle
-    # long prompts).
-    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=256)
+    def _run(_pipe, _gen):
+        return _pipe(
+            prompt=_build_prompt(data, _pipe.tokenizer, max_tokens=256),
+            negative_prompt=data.negative_prompt,
+            control_image=conditioning,
+            controlnet_conditioning_scale=scales,
+            guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+            num_inference_steps=n_steps,
+            height=target_h,
+            width=target_w,
+            generator=_gen,
+            use_resolution_binning=bin_resolution,
+        )
 
     gen_device = "cpu" if device in ("mps", "cpu") else device
     gen = torch.Generator(gen_device).manual_seed(data.seed)
-    result = pipe(
-        prompt=prompt,
-        negative_prompt=data.negative_prompt,
-        control_image=conditioning,
-        controlnet_conditioning_scale=scales,
-        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
-        num_inference_steps=n_steps,
-        height=target_h,
-        width=target_w,
-        generator=gen,
-    )
+    result = _run(pipe, gen)
     image: Image.Image = result.images[0]
+
+    # CPU bf16 can emit a black/NaN frame on the non-distilled (full) variant.
+    # Rebuild at fp32 and retry once -- mirrors the SD 1.5 MPS fp16-NaN
+    # recovery philosophy. fp32 ~doubles RAM and runtime but is numerically
+    # safe. The distilled path has not been observed to need this; we still
+    # guard it so the fallback is automatic if it ever does.
+    arr = np.asarray(image, dtype=np.float32)
+    if (not np.isfinite(arr).all()) or (arr.max() - arr.min() < 1.0):
+        if device == "cpu":
+            print(
+                "  note   : bf16 produced a black/NaN frame on CPU; "
+                "retrying in fp32 (slower, ~2x RAM)."
+            )
+            del pipe, result, gen
+            free_torch()
+            pipe, torch = _build_hunyuan_pipeline(device, model=model, dtype=torch.float32)
+            gen = torch.Generator(gen_device).manual_seed(data.seed)
+            result = _run(pipe, gen)
+            image = result.images[0]
 
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation
@@ -1778,6 +1822,7 @@ def decode_brainimg(
     canny_scale: float | None = None,
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
+    bin_resolution: bool = False,
 ) -> tuple[BrainimgData, Image.Image]:
     """Read *path*, regenerate the image, save it to *out_path*."""
     data = load_brainimg(path)
@@ -1792,6 +1837,7 @@ def decode_brainimg(
         canny_scale=canny_scale,
         seg_scale=seg_scale,
         model=model,
+        bin_resolution=bin_resolution,
     )
 
     out_path = Path(out_path)

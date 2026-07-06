@@ -111,12 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         "+ InstantX Union ControlNet (depth-only; canny and seg ignored, "
         "same as zimage). 50 steps, Qwen text encoder (512 tokens), "
         "true_cfg_scale 4.0. Needs ~20 GB RAM resident on CPU. "
-        "'hunyuan' uses Tencent's Hunyuan-DiT v1.2 Distilled (bilingual "
+        "'hunyuan' uses Tencent's HunyuanDiT v1.2 Distilled (bilingual "
         "DiT, 25 steps) with separate depth + canny ControlNets (same "
         "two-conditioner pattern as sd15/sdxl; seg map ignored). bf16, "
         "BERT + T5 text encoders. Needs ~12 GB RAM resident on CPU. "
         "'hunyuan-full' is the non-distilled variant (50 steps, same "
-        "ControlNets). 'sana' uses NVIDIA's SANA 600M (MIT, linear DiT) "
+        "ControlNets). HunyuanDiT honors --size exactly by default (off "
+        "its 1024-trained distribution); pass --bin-resolution to remap "
+        "to the nearest trained shape. "
+        "'sana' uses NVIDIA's SANA 600M (MIT, linear DiT) "
         "with an HED ControlNet -- the only available ControlNet type for "
         "SANA. The blueprint's canny map is fed to the HED ControlNet "
         "(edge-to-edge, closest match); depth and seg are ignored. "
@@ -134,6 +137,16 @@ def main(argv: list[str] | None = None) -> int:
         "Hyper-SD's 8-step FLUX LoRA on top of the same control pipeline "
         "-- drops FLUX from 30 to 8 steps, guidance 3.5 (the dev default). "
         "~4-5x faster on CPU.",
+    )
+    parser.add_argument(
+        "--bin-resolution",
+        action="store_true",
+        help="HunyuanDiT-only. By default HunyuanDiT honors --size exactly "
+        "(e.g. 512x512), which is off its 1024-trained distribution but "
+        "faster. Pass --bin-resolution to let diffusers remap the requested "
+        "shape to the nearest trained shape (e.g. 512x512 -> 1024x1024), "
+        "restoring on-distribution quality at the cost of runtime. Ignored "
+        "by all other backends.",
     )
     args = parser.parse_args(argv)
 
@@ -277,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : HunyuanDiT on CPU keeps the whole bf16 pipeline in RAM (~12 GB).")
     if args.model in ("hunyuan", "hunyuan-full"):
         print("  note   : HunyuanDiT uses depth + canny; seg map is ignored (no seg ControlNet).")
+    if args.model in ("hunyuan", "hunyuan-full") and not args.bin_resolution:
+        print(
+            "  note   : --bin-resolution off; --size is honored exactly "
+            "(HunyuanDiT trained at 1024, off-distribution PSNR may drop)."
+        )
     if args.model == "sana" and device != "cuda":
         print("  note   : SANA without CUDA is slow (20 steps on CPU).")
     if args.model == "sana" and device == "cpu":
@@ -332,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         canny_scale=args.canny_scale,
         seg_scale=args.seg_scale,
         model=args.model,
+        bin_resolution=args.bin_resolution,
     )
     dt = time.time() - t0
 

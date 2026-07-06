@@ -150,6 +150,19 @@ for the full project description and `TODO.md` for planned decode-quality work.
   (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR backend due to
   the mismatch.
   Depth and seg maps are ignored (no depth/seg ControlNet exists for SANA).
+- **FLUX Control CPU bf16 black frame + gating**: `--model flux-canny`
+  (and the `flux-canny-turbo` variant) can emit a black/NaN frame under
+  bf16 on CPU -- the near-zero canny conditioning latent stresses bf16
+  precision in the channel-concat attention (depth has not been observed
+  to). `_generate_flux` detects a black/NaN frame and retries once at
+  fp32 (~2× RAM/runtime, numerically safe) -- the same recovery
+  philosophy as the HunyuanDiT CPU bf16 handling. `FLUX.1-Depth-dev` and
+  `FLUX.1-Canny-dev` are **gated** repos (FLUX.1-dev non-commercial
+  license); Depth is cached locally from an earlier auth, but Canny is a
+  separate gate that must be accepted independently. `_build_flux_pipeline`
+  catches `GatedRepoError` and raises a clear `RuntimeError` with the
+  license URL + `huggingface-cli login` instructions instead of a raw
+  401 traceback.
 - **FLUX.2-klein img2img pseudo-ControlNet**: `--model flux2-klein` uses
   FLUX.2-klein-4B (Apache 2.0, ungated, 4B, 4-step distilled) as an
   image-to-image model, feeding the blueprint's depth map as the starting

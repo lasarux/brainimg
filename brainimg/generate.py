@@ -1086,7 +1086,18 @@ def _build_flux2_pipeline(device: str):
     return pipe, torch
 
 
-def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
+def _flux_gating_msg(repo: str) -> str:
+    """Actionable message for FLUX.1-Depth-dev / -Canny-dev gating failures."""
+    return (
+        f"{repo} is a gated model (FLUX.1-dev non-commercial license). "
+        f"Visit https://huggingface.co/{repo}, accept the license, then run "
+        f"`huggingface-cli login` or set HF_TOKEN. (Fine-grained tokens must "
+        f"also enable 'access to public gated repositories' in the token "
+        f"settings at https://huggingface.co/settings/tokens.)"
+    )
+
+
+def _build_flux_pipeline(device: str, variant: str, quantize: bool = False, dtype=None):
     """Construct the FLUX Control pipeline (flux-depth or flux-canny).
 
     Distinct from the SD 1.5/SDXL and Z-Image paths:
@@ -1124,18 +1135,49 @@ def _build_flux_pipeline(device: str, variant: str, quantize: bool = False):
         ``qfloat8`` -- we follow that). ``freeze()`` after each quantize
         so the calibration graph doesn't get re-run on each forward.
 
+    ``dtype`` overrides the load dtype (default bf16). The CPU fp32 fallback
+    for the black/NaN frame case passes ``torch.float32`` here. On the fp32
+    retry ``quantize`` is ignored -- fp32 is already the safe path.
+
+    Raises ``RuntimeError`` with actionable instructions if the repo is
+    gated and no HF token / license acceptance is on file, instead of
+    letting the raw ``GatedRepoError`` traceback propagate.
+
     Returns ``(pipe, torch)`` to match the SD/Z-Image builder signature.
     """
     import torch
     from diffusers import FluxControlPipeline
+    from huggingface_hub import errors as hf_errors
 
     cfg = _model_config(variant)
-    load_dtype = torch.bfloat16
+    load_dtype = dtype if dtype is not None else torch.bfloat16
 
-    pipe = FluxControlPipeline.from_pretrained(
-        cfg["base_id"],
-        torch_dtype=load_dtype,
-    )
+    # FLUX.1-Depth-dev / -Canny-dev are gated repos (FLUX.1-dev non-commercial
+    # license). Three failure modes reach here depending on auth state:
+    #   * no token + license not accepted -> GatedRepoError (401)
+    #   * fine-grained token without gated-repo permission -> the head call
+    #     403s, huggingface_hub wraps it as HfHubHTTPError, then falls back
+    #     to a cache miss and re-raises as LocalEntryNotFoundError
+    #   * token with permission + license accepted -> success (or a real
+    #     network error, which we let surface as-is)
+    # We rewrite the gating cases into a clear RuntimeError with the license
+    # URL + login instructions; other errors propagate unchanged.
+    gated_repos = {"black-forest-labs/FLUX.1-Depth-dev", "black-forest-labs/FLUX.1-Canny-dev"}
+    try:
+        pipe = FluxControlPipeline.from_pretrained(
+            cfg["base_id"],
+            torch_dtype=load_dtype,
+        )
+    except hf_errors.GatedRepoError as exc:
+        raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+    except hf_errors.LocalEntryNotFoundError as exc:
+        if cfg["base_id"] in gated_repos:
+            raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+        raise
+    except hf_errors.HfHubHTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (401, 403):
+            raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+        raise
 
     if device == "cuda":
         pipe = pipe.to("cuda")
@@ -1756,6 +1798,8 @@ def _generate_flux(
     conditioning strength is baked into the channel-concat weights, with
     no per-call scale kwarg on diffusers' ``FluxControlPipeline.__call__``.
     """
+    import numpy as np
+
     device = device_override or get_torch_device()
     cfg = _model_config(variant)
 
@@ -1782,24 +1826,47 @@ def _generate_flux(
 
     pipe, torch = _build_flux_pipeline(device, variant, quantize=quantize)
 
-    # FLUX's tokenizer is CLIPTokenizer (text_encoder=CLIP-L) for ``tokenizer``
-    # and T5TokenizerFast (text_encoder_2=T5-XXL) for ``tokenizer_2``. The
-    # T5 path can take 512 tokens; combined prompt always fits.
-    prompt = _build_prompt(data, pipe.tokenizer_2, max_tokens=cfg["max_tokens"])
+    def _run(_pipe, _gen):
+        # FLUX's tokenizer is CLIPTokenizer (text_encoder=CLIP-L) for
+        # ``tokenizer`` and T5TokenizerFast (text_encoder_2=T5-XXL) for
+        # ``tokenizer_2``. The T5 path can take 512 tokens; combined prompt
+        # always fits.
+        return _pipe(
+            prompt=_build_prompt(data, _pipe.tokenizer_2, max_tokens=cfg["max_tokens"]),
+            control_image=control_image,
+            guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+            num_inference_steps=n_steps,
+            height=target_h,
+            width=target_w,
+            max_sequence_length=cfg["max_tokens"],
+            generator=_gen,
+        )
 
     gen_device = "cpu" if device in ("mps", "cpu") else device
     gen = torch.Generator(gen_device).manual_seed(data.seed)
-    result = pipe(
-        prompt=prompt,
-        control_image=control_image,
-        guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
-        num_inference_steps=n_steps,
-        height=target_h,
-        width=target_w,
-        max_sequence_length=cfg["max_tokens"],
-        generator=gen,
-    )
+    result = _run(pipe, gen)
     image: Image.Image = result.images[0]
+
+    # CPU bf16 can emit a black/NaN frame on the canny variant (the near-zero
+    # canny conditioning latent stresses bf16 precision in the channel-concat
+    # attention; depth has not been observed to). Rebuild at fp32 and retry
+    # once -- mirrors the HunyuanDiT CPU bf16 recovery and the SD 1.5 MPS
+    # fp16-NaN philosophy. fp32 ~doubles RAM and runtime but is numerically
+    # safe. ``quantize`` (FP8) is dropped on the retry -- fp32 is already the
+    # safe path and FP8 would re-introduce the low-precision failure mode.
+    arr = np.asarray(image, dtype=np.float32)
+    if (not np.isfinite(arr).all()) or (arr.max() - arr.min() < 1.0):
+        if device == "cpu":
+            print(
+                "  note   : bf16 produced a black/NaN frame on CPU; "
+                "retrying in fp32 (slower, ~2x RAM)."
+            )
+            del pipe, result, gen
+            free_torch()
+            pipe, torch = _build_flux_pipeline(device, variant, dtype=torch.float32)
+            gen = torch.Generator(gen_device).manual_seed(data.seed)
+            result = _run(pipe, gen)
+            image = result.images[0]
 
     image = _match_color_statistics(
         image, data.target_brightness, data.target_saturation

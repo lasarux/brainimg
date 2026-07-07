@@ -279,8 +279,10 @@ and the same brightness/saturation post-processing:
 | `flux-canny` | `black-forest-labs/FLUX.1-Canny-dev` | channel-concat `canny_map_b64` | 30 | FLUX.1-dev non-commercial |
 | `flux-depth-turbo` | FLUX.1-Depth-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `depth_map_b64` | 8 | FLUX.1-dev non-commercial |
 | `flux-canny-turbo` | FLUX.1-Canny-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `canny_map_b64` | 8 | FLUX.1-dev non-commercial |
+| `flux-union` | `black-forest-labs/FLUX.1-dev` + Shakker-Labs Union ControlNet | Union ControlNet (depth + canny) | 24 | FLUX.1-dev non-commercial |
+| `sd35` | `stabilityai/stable-diffusion-3.5-large` | depth + canny ControlNets | 50 | stabilityai-ai-community |
 
-All fourteen backends consume the **same blueprint**; the schema is unchanged
+All sixteen backends consume the **same blueprint**; the schema is unchanged
 when a new decoder is added. We describe the SD 1.5 / SDXL path in detail
 (the historical default), then summarise the turbo, Z-Image, Qwen-Image,
 HunyuanDiT, SANA, FLUX.2-klein, and FLUX paths that diverge structurally.
@@ -429,13 +431,40 @@ only supports fixed resolutions (1024, 1280, …); on a 512-side blueprint it
 auto-upscales to 1024. Text encoding uses BERT + T5 (the CLIP 77-token
 limit does not apply; the colour-style prefix is prepended unconditionally).
 bf16 throughout (HunyuanDiT's native dtype, sidesteps the MPS fp16 NaN bug).
-Defaults: depth scale 0.8, canny scale 0.8, `guidance_scale = 6.0`, 25 steps
+Defaults: depth scale 0.8, canny scale 0.8, `guidance_scale = 3.0`, 25 steps
 (distilled), 1024 max side. `--model hunyuan-full` swaps the Distilled base
 for the non-distilled `HunyuanDiT-v1.2-Diffusers` (50 steps, otherwise
 identical) so we can isolate whether distillation is the source of the
 visual artefacts (§4.6). **License**: tencent-hunyuan-community.
 
-### 3.3.7 SANA 600M (HED ControlNet, MIT)
+### 3.3.7 FLUX.1-dev Union ControlNet (depth + canny)
+
+`--model flux-union` loads Black Forest Labs' **FLUX.1-dev** base plus the
+**Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro** checkpoint [Shakker Labs
+& InstantX, 2024]. The Union ControlNet bundles seven conditioning modes
+(canny, tile, depth, blur, pose, gray, low-quality) into a single network;
+we feed **depth (mode 2) and canny (mode 0) simultaneously** via
+`FluxMultiControlNetModel` and `control_mode=[2, 0]`. The blueprint's seg
+map is **silently ignored** (no seg mode). `guidance_scale = 3.5`, 24 steps,
+`controlnet_conditioning_scale = 0.4` per map, 1024 max side,
+`max_sequence_length = 512`. `--quantize` FP8-quantizes the transformer and
+T5-XXL (weights only), dropping resident CPU RAM from ~24 GB to ~12 GB.
+**License**: FLUX.1-dev non-commercial (gated).
+
+### 3.3.8 Stable Diffusion 3.5 Large (depth + canny ControlNets)
+
+`--model sd35` loads Stability AI's **Stable Diffusion 3.5 Large**
+[Stability AI, 2024] (8B MMDiT) with the official **depth** and **canny**
+ControlNets. Both ControlNets are 8B checkpoints; we load them separately
+and wrap them in `SD3MultiControlNetModel` so depth and canny are fed
+together. Text encoding uses CLIP-L, CLIP-G, and T5-XXL (the SD3 text
+encoder stack). bf16 throughout. Defaults: depth scale 0.7, canny scale 0.7,
+`guidance_scale = 4.5`, 50 steps, 1024 max side,
+`max_sequence_length = 256`. The seg map is **silently ignored** (no SD3.5
+seg ControlNet). **License**: stabilityai-ai-community (gated, free for
+non-commercial and for commercial use up to $1M annual revenue).
+
+### 3.3.9 SANA 600M (HED ControlNet, MIT)
 
 `--model sana` loads NVIDIA's **SANA** [Xie et al., 2024]
 (arXiv 2410.10629, MIT license) — a 600 M-parameter linear DiT with a DC-AE
@@ -484,7 +513,7 @@ matmuls entirely, while the VAE runs in fp32 for a clean final decode. On
 CPU, full fp32 is supported (best fidelity, slow) and an optional int8
 weights mode fits in ~5 GB at a small quality cost. On CUDA, fp16 works
 correctly and is fast. Z-Image, Qwen-Image, HunyuanDiT, SANA, FLUX.2-klein,
-and FLUX are bf16-native and sidestep the MPS fp16 NaN bug entirely; on a
+FLUX, and SD3.5 are bf16-native and sidestep the MPS fp16 NaN bug entirely; on a
 CPU-only box they are kept resident in host RAM (diffusers'
 `enable_model_cpu_offload` raises `RuntimeError` without an accelerator to
 offload *to*).
@@ -502,6 +531,8 @@ offload *to*).
 | `cpu --model flux2-klein` | bf16 resident | ~13 GB | 240 s @ 512² | good PSNR, poor colour |
 | `cpu --model flux-depth --quantize` | bf16 + FP8 (host RAM) | ~12 GB | 654 s @ 512² | **best** (FLUX) |
 | `cpu --model flux-depth-turbo --quantize` | bf16 + FP8 + Hyper-SD 8-step | ~12 GB | **166 s** @ 512² | **best+** (+1.41 dB vs 30-step) |
+| `cpu --model flux-union --quantize` | bf16 + FP8 (host RAM) | ~12 GB | ~860 s @ 512² | mid PSNR |
+| `cpu --model sd35` | bf16 resident | ~16-20 GB | ~3100 s @ 1024²→512² | mid PSNR, can zoom at 512² |
 | `mps` (sd15, Apple Silicon) | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
 | `cuda` (sd15) | fp16 | ~5 GB | **fast** | good |
 
@@ -725,6 +756,9 @@ palettes and grayscale.
 | FLUX.2-klein (img2img, 512²) | 4 | 42 | 5159 | 11.01 | 57.2 |
 | FLUX.1-Depth-dev (FP8) | 30 | 510 | 6620 | 9.92 | 64.6 |
 | FLUX.1-Depth-dev turbo (FP8) | 8 | **475** | 6648 | 9.90 | 64.5 |
+| FLUX Union (depth+canny, FP8) | 24 | ~860 | 7817 | 9.20 | 72.2 |
+| SD 3.5 (depth+canny, 1024²→512²) | 50 | ~3100 | 8048 | 9.07 | 72.8 |
+
 | **Cross-subject sanity (FLUX depth turbo, FP8)** | | | | | |
 | `peppers_color.tif` (512²) | 8 | 187 | 4142 | 11.96 | 51.5 |
 | `cameraman.tif` (512² grayscale) | 8 | 207 | 1712 | **15.80** | 28.4 |
@@ -774,6 +808,14 @@ Six observations:
    or colour-distribution failures; this is the concrete
    pixel-metric-vs-perceptual disconnect flagged in §5.3 as motivation
    for adding LPIPS / CLIP-score / FID in a real evaluation.
+
+7. **The two newest ControlNet backends sit in the mid-PSNR range.**
+   FLUX Union (9.20 dB, ~860 s) and SD 3.5 (9.07 dB, ~3100 s) both
+   underperform the headline FLUX depth turbo and SDXL results on the
+   mandril. SD 3.5 additionally requires native 1024² generation: when
+   forced to 512² it produces a zoomed/cropped composition, so the
+   decoder generates at 1024² and downscales. Both are included as
+   additional ControlNet options rather than top-tier fidelity choices.
 
 **These numbers do not generalise beyond the SIPI samples** (four sources
 with varied palettes); §5.3 notes that a real evaluation requires more
@@ -866,10 +908,11 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
 - **Quality depends on device.** CPU fp32 gives the best SD 1.5
   reconstruction; on 8 GB Apple Silicon, int8 quantization (required by
   the MPS fp16 NaN bug) degrades structural fidelity. Z-Image-Turbo,
-  Qwen-Image, HunyuanDiT, SANA, FLUX.2-klein, and FLUX are bf16-native
-  and are not supported on 8 GB Apple Silicon; FLUX CPU requires ~22 GB
-  host RAM (or ~12 GB with `--quantize`). SANA is the lightest of the
-  bf16-native backends (~5 GB RAM).
+  Qwen-Image, HunyuanDiT, SANA, FLUX.2-klein, FLUX, and SD3.5 are
+  bf16-native and are not supported on 8 GB Apple Silicon; FLUX CPU
+  requires ~22 GB host RAM (or ~12 GB with `--quantize`), while SD3.5
+  requires ~16-20 GB. SANA is the lightest of the bf16-native backends
+  (~5 GB RAM).
 - **Lossy by design.** Reconstruction is semantically faithful, not
   pixel-identical. The format is explicitly unsuited to medical, legal, or
   forensic images.
@@ -891,7 +934,8 @@ generative codecs: within a fixed decoder version, a file *is* a stable image.
   CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is non-commercial.
   HunyuanDiT is tencent-hunyuan-community (a bespoke community license,
   not OSI-approved). FLUX.1-Depth-dev / -Canny-dev are FLUX.1-dev
-  non-commercial. Qwen-Image, SANA, and FLUX.2-klein-4B are **Apache 2.0**
+  non-commercial; SD3.5 is stabilityai-ai-community (gated, free up to
+  $1M annual revenue). Qwen-Image, SANA, and FLUX.2-klein-4B are **Apache 2.0**
   — the three fully-open options. If distribution matters, the SD 1.5/SDXL,
   Qwen-Image, SANA, and FLUX.2-klein paths are the permissively licensed
   choices.
@@ -913,10 +957,11 @@ these via `encoder.py`/`decoder.py` and the `samples/` directory.
 brainimg is a small, reproducible prototype of a different way to compress
 images: store the *meaning and structure* of a scene and let a diffusion model
 repaint it. We have described the format schema, the four-stage encoder, the
-fourteen decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
+sixteen decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
 Z-Image-Turbo, Qwen-Image, HunyuanDiT v1.2 distilled and full, SANA,
-FLUX.2-klein-4B img2img, and FLUX.1-Depth-dev / -Canny-dev with their
-Hyper-SD turbo variants) with their quality post-processing and gamma
+FLUX.2-klein-4B img2img, FLUX.1-Depth-dev / -Canny-dev with their
+Hyper-SD turbo variants, FLUX.1-dev + Shakker-Labs Union ControlNet,
+and Stable Diffusion 3.5 Large) with their quality post-processing and gamma
 brightness fallback, and the device/precision tradeoffs across CPU fp32,
 MPS int8, and CUDA fp16. Using measurements reproducible from the
 committed repository on an AMD CPU target with 188 GB RAM, we observe

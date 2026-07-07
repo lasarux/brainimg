@@ -27,6 +27,9 @@ out/
 recon.jpg
 recon_*.jpg
 recon_*.png
+# Sweep / run logs
+phase2_sweep.log
+*.sweep.log
 # Generated side-by-side comparisons and per-backend reconstruction outputs.
 # These are produced by decoder.py / scripts and are not tracked.
 *_comparison.jpg

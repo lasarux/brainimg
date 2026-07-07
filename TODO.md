@@ -107,6 +107,22 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       trained primarily on Chinese data; the English caption produces
       inferior results regardless of tuning.
       Not recommended for visual use; kept for the systems-study comparison.
+- [x] **FLUX Union ControlNet backend.** `--model flux-union` uses
+      `black-forest-labs/FLUX.1-dev` + `Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro`.
+      The single Union ControlNet supports depth (mode 2) and canny (mode 0)
+      fed simultaneously via `FluxMultiControlNetModel`. 24 steps,
+      guidance_scale 3.5, controlnet_conditioning_scale 0.4 per map, bf16,
+      1024 max side. `--quantize` FP8-quantizes transformer + T5-XXL
+      (weights only). Measured on mandril 512² CPU with `--quantize`:
+      ~860 s / 9.20 dB PSNR. License: FLUX.1-dev non-commercial (gated).
+- [x] **Stable Diffusion 3.5 Large backend.** `--model sd35` uses
+      `stabilityai/stable-diffusion-3.5-large` (8B MMDiT) + two separate 8B
+      depth/canny ControlNets wrapped in `SD3MultiControlNetModel`. bf16,
+      50 steps, guidance_scale 4.5, 1024 max side. `_generate_sd35`
+      generates at the native 1024² resolution and downscales to the
+      requested output size; 512² direct generation produces a zoomed/cropped
+      composition. Measured on mandril 512² CPU: ~3100 s / 9.07 dB PSNR.
+      Gated (stabilityai-ai-community license, free up to $1M annual revenue).
 - [x] **SANA backend.** `--model sana` adds NVIDIA's SANA 600M (MIT, linear
       DiT, arXiv 2410.10629) with an HED ControlNet — the only ControlNet
       type available for SANA. The blueprint's canny map is fed to the HED

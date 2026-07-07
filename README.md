@@ -23,6 +23,8 @@ resolution.
 | Image generation (decoder, `--model qwen-image`) | PyTorch + bf16 | `Qwen/Qwen-Image` (DiT, Apache 2.0) + `InstantX/Qwen-Image-ControlNet-Union` (depth-only) |
 | Image generation (decoder, `--model hunyuan`) | PyTorch + bf16 | `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled` (DiT) + separate depth + canny ControlNets |
 | Image generation (decoder, `--model flux-depth` / `--model flux-canny`) | PyTorch + bf16 (+ optional FP8) | `black-forest-labs/FLUX.1-Depth-dev` / `FLUX.1-Canny-dev` (12B MMDiT + T5-XXL; one conditioning image, channel-concat) |
+| Image generation (decoder, `--model flux-union`) | PyTorch + bf16 (+ optional FP8) | `black-forest-labs/FLUX.1-dev` + `Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro` (depth + canny simultaneously) |
+| Image generation (decoder, `--model sd35`) | PyTorch + bf16 | `stabilityai/stable-diffusion-3.5-large` (8B MMDiT) + two 8B depth/canny ControlNets |
 
 Captioning uses the MLX 4-bit model on Apple Silicon (fast, low memory) and
 falls back to the HuggingFace transformers Qwen2.5-VL-7B model on any other
@@ -350,6 +352,8 @@ rows (peppers, cameraman) at the best backend.
 | `flux2-klein` (img2img, 512) | 4 | 42 s | 5158.95 | 11.01 | 57.21 |
 | `flux-depth` (FP8) | 30 | 510 s | 6619.91 | 9.92 | 64.64 |
 | `flux-depth-turbo` (FP8) | 8 | **475 s** | 6648.45 | 9.90 | 64.48 |
+| `flux-union` (depth+canny, FP8) | 24 | ~860 s | 7817.07 | 9.20 | 72.19 |
+| `sd35` (depth+canny, 1024²→512²) | 50 | ~3100 s | 8048.00 | 9.07 | 72.76 |
 | **cross-subject sanity** | | | | | |
 | `peppers` @ flux-depth-turbo (FP8) | 8 | 187 s | 4142.31 | 11.96 | 51.45 |
 | `cameraman` (grayscale) @ flux-depth-turbo (FP8) | 8 | 207 s | 1712.25 | **15.80** | 28.40 |
@@ -367,6 +371,8 @@ variants; the decoder strips the `x_embedder` / `context_embedder` LoRA
 deltas (shape-incompatible with the Control transformer's extra input
 channels) and keeps the attention/FFN deltas.
 Z-Image is depth-only so it ignores the canny/seg maps.
+`sd35` always generates at its native 1024² resolution and downscales to
+512²; forcing SD 3.5 Large to 512² produces a zoomed/cropped composition.
 **HunyuanDiT scores mid-pack by PSNR (10.68 dB) but is visually the
 worst backend by a wide margin** — visible artifacts and a blue-band
 collapse (8.8% vs source 30.7%) that MSE/PSNR do not capture. This is a

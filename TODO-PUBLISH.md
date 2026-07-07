@@ -75,6 +75,8 @@ AGENTS.md encoder/decoder separation rule):
 - [x] flux-depth-turbo (8-step Hyper-SD, FP8)
 - [-] flux-canny (30-step, FP8) — only if included in the headline set
       *(skipped — not in the headline 12; flux-canny-turbo likewise not run.)*
+- [x] flux-union (24-step, depth+canny, FP8)
+- [x] sd35 (50-step, depth+canny, bf16, 1024²→512²)
 
 For each: write `<name>_<backend>.png` + `<name>_<backend>_comparison.jpg`.
 Compute MSE / PSNR / MAE with the generalized `compare_backends.py`

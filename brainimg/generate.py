@@ -237,10 +237,48 @@ HUNYUAN_CONTROLNET_DEPTH_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffus
 HUNYUAN_CONTROLNET_CANNY_ID = "Tencent-Hunyuan/HunyuanDiT-v1.2-ControlNet-Diffusers-Canny"
 HUNYUAN_CONTROLNET_DEPTH_SCALE = 0.8
 HUNYUAN_CONTROLNET_CANNY_SCALE = 0.8
-HUNYUAN_GUIDANCE_SCALE = 6.0
+HUNYUAN_GUIDANCE_SCALE = 3.0
 HUNYUAN_DEFAULT_STEPS = 25
 HUNYUAN_FULL_DEFAULT_STEPS = 50
 HUNYUAN_MAX_DEFAULT_SIDE = 1024
+
+# --- SD 3.5 stack ----------------------------------------------------------- #
+# Stability AI's Stable Diffusion 3.5 Large (8B MMDiT) with official depth +
+# canny ControlNets. This is the first SD backend with separate 8B ControlNets
+# that accept both maps simultaneously via ``SD3MultiControlNetModel`` -- same
+# two-conditioner pattern as SD 1.5/SDXL/HunyuanDiT, but at 1024² and with
+# SD3's three text encoders (CLIP-L, CLIP-G, T5-XXL). bf16 throughout (sidesteps
+# the MPS fp16 NaN bug). The blueprint's seg map is ignored (no seg ControlNet
+# exists for SD3.5). License: stabilityai-ai-community (gated).
+SD35_MODEL_ID = "stabilityai/stable-diffusion-3.5-large"
+SD35_CONTROLNET_DEPTH_ID = "stabilityai/stable-diffusion-3.5-large-controlnet-depth"
+SD35_CONTROLNET_CANNY_ID = "stabilityai/stable-diffusion-3.5-large-controlnet-canny"
+# Model card recommends strength 0.7-0.8; start at 0.7.
+SD35_CONTROLNET_DEPTH_SCALE = 0.7
+SD35_CONTROLNET_CANNY_SCALE = 0.7
+SD35_GUIDANCE_SCALE = 4.5
+SD35_DEFAULT_STEPS = 50
+SD35_MAX_DEFAULT_SIDE = 1024
+SD35_MAX_TOKENS = 256
+
+# --- FLUX ControlNet Union stack -------------------------------------------- #
+# Black Forest Labs' FLUX.1-dev base + Shakker-Labs/InstantX Union ControlNet.
+# The Union net supports seven control modes in one checkpoint; we feed depth
+# (mode 2) and canny (mode 0) simultaneously through ``FluxMultiControlNetModel``.
+# Reuses the cached FLUX.1-dev base. The blueprint's seg map is ignored (the
+# Union net has no seg mode). bf16 throughout. License: FLUX.1-dev non-commercial
+# (gated, same gate as flux-depth/flux-canny).
+FLUX_UNION_MODEL_ID = "black-forest-labs/FLUX.1-dev"
+FLUX_UNION_CONTROLNET_ID = "Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro"
+FLUX_UNION_DEPTH_MODE = 2
+FLUX_UNION_CANNY_MODE = 0
+# Card recommends 0.3-0.8; example uses 0.4 per map for multi-control.
+FLUX_UNION_DEPTH_SCALE = 0.4
+FLUX_UNION_CANNY_SCALE = 0.4
+FLUX_UNION_GUIDANCE_SCALE = 3.5
+FLUX_UNION_DEFAULT_STEPS = 24
+FLUX_UNION_MAX_DEFAULT_SIDE = 1024
+FLUX_UNION_MAX_TOKENS = 512
 
 # --- SANA stack ------------------------------------------------------------- #
 # NVIDIA's SANA (arXiv 2410.10629, MIT license) is a linear DiT optimized for
@@ -531,6 +569,41 @@ def _model_config(model: str) -> dict:
             "max_side": FLUX2_KLEIN_MAX_DEFAULT_SIDE,
             "default_steps": FLUX2_KLEIN_DEFAULT_STEPS,
             "max_tokens": FLUX2_KLEIN_MAX_TOKENS,
+            "turbo": False,
+        }
+    if model == "sd35":
+        # Stable Diffusion 3.5 Large: separate 8B depth + canny ControlNets,
+        # wrapped in SD3MultiControlNetModel. Three text encoders (CLIP-L,
+        # CLIP-G, T5-XXL), bf16, 1024-native. Seg map ignored.
+        return {
+            "base_id": SD35_MODEL_ID,
+            "depth_id": SD35_CONTROLNET_DEPTH_ID,
+            "canny_id": SD35_CONTROLNET_CANNY_ID,
+            "depth_scale": SD35_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": SD35_CONTROLNET_CANNY_SCALE,
+            "seg_scale": None,
+            "guidance": SD35_GUIDANCE_SCALE,
+            "max_side": SD35_MAX_DEFAULT_SIDE,
+            "default_steps": SD35_DEFAULT_STEPS,
+            "max_tokens": SD35_MAX_TOKENS,
+            "turbo": False,
+        }
+    if model == "flux-union":
+        # FLUX.1-dev + Shakker-Labs Union ControlNet. A single net handles
+        # depth (mode 2) and canny (mode 0); we feed both maps at once via
+        # FluxMultiControlNetModel. Seg map ignored. bf16, 1024-native.
+        return {
+            "base_id": FLUX_UNION_MODEL_ID,
+            "controlnet_id": FLUX_UNION_CONTROLNET_ID,
+            "depth_scale": FLUX_UNION_DEPTH_SCALE,
+            "canny_scale": FLUX_UNION_CANNY_SCALE,
+            "depth_mode": FLUX_UNION_DEPTH_MODE,
+            "canny_mode": FLUX_UNION_CANNY_MODE,
+            "seg_scale": None,
+            "guidance": FLUX_UNION_GUIDANCE_SCALE,
+            "max_side": FLUX_UNION_MAX_DEFAULT_SIDE,
+            "default_steps": FLUX_UNION_DEFAULT_STEPS,
+            "max_tokens": FLUX_UNION_MAX_TOKENS,
             "turbo": False,
         }
     if model == "sdxl":
@@ -1009,6 +1082,89 @@ def _build_hunyuan_pipeline(
     return pipe, torch
 
 
+def _sd35_gating_msg(repo: str) -> str:
+    """Actionable message for SD3.5 gated-repo failures."""
+    return (
+        f"{repo} is a gated model (Stability AI community license). "
+        f"Visit https://huggingface.co/{repo}, accept the license, then run "
+        f"`huggingface-cli login` or set HF_TOKEN. (Fine-grained tokens must "
+        f"also enable 'access to public gated repositories' in the token "
+        f"settings at https://huggingface.co/settings/tokens.)"
+    )
+
+
+def _build_sd35_pipeline(device: str, dtype=None):
+    """Construct the SD3.5-Large + depth + canny ControlNet pipeline.
+
+    SD3.5 Large is an 8B MMDiT with official 8B depth and canny ControlNets.
+    We load both ControlNets and wrap them in ``SD3MultiControlNetModel`` so
+    depth and canny can be fed simultaneously. bf16 throughout by default.
+
+    Memory strategy mirrors the other bf16 DiT paths:
+      * cuda: ``pipe.to("cuda")``.
+      * mps:  ``enable_model_cpu_offload()``.
+      * cpu:  ``pipe.to("cpu")`` -- resident in host RAM (~16-20 GB bf16 for
+        the 8B base + 16B ControlNets + T5-XXL/CLIP encoders).
+
+    ``dtype`` overrides the load dtype (default bf16). The CPU fp32 fallback
+    for the black/NaN frame case passes ``torch.float32`` here.
+
+    Raises ``RuntimeError`` with license instructions if the gated repos are
+    not accessible.
+
+    Returns ``(pipe, torch)``.
+    """
+    import torch
+    from diffusers import (
+        SD3ControlNetModel,
+        SD3MultiControlNetModel,
+        StableDiffusion3ControlNetPipeline,
+    )
+    from huggingface_hub import errors as hf_errors
+
+    cfg = _model_config("sd35")
+    load_dtype = dtype if dtype is not None else torch.bfloat16
+
+    gated_repos = {
+        SD35_MODEL_ID,
+        SD35_CONTROLNET_DEPTH_ID,
+        SD35_CONTROLNET_CANNY_ID,
+    }
+
+    try:
+        depth_cn = SD3ControlNetModel.from_pretrained(
+            cfg["depth_id"], torch_dtype=load_dtype
+        )
+        canny_cn = SD3ControlNetModel.from_pretrained(
+            cfg["canny_id"], torch_dtype=load_dtype
+        )
+        controlnet = SD3MultiControlNetModel([depth_cn, canny_cn])
+        pipe = StableDiffusion3ControlNetPipeline.from_pretrained(
+            cfg["base_id"],
+            controlnet=controlnet,
+            torch_dtype=load_dtype,
+        )
+    except hf_errors.GatedRepoError as exc:
+        raise RuntimeError(_sd35_gating_msg(cfg["base_id"])) from exc
+    except hf_errors.LocalEntryNotFoundError as exc:
+        if cfg["base_id"] in gated_repos:
+            raise RuntimeError(_sd35_gating_msg(cfg["base_id"])) from exc
+        raise
+    except hf_errors.HfHubHTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (401, 403):
+            raise RuntimeError(_sd35_gating_msg(cfg["base_id"])) from exc
+        raise
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to("cpu")
+
+    return pipe, torch
+
+
 def _build_sana_pipeline(device: str):
     """Construct the SANA + HED ControlNet pipeline.
 
@@ -1087,7 +1243,7 @@ def _build_flux2_pipeline(device: str):
 
 
 def _flux_gating_msg(repo: str) -> str:
-    """Actionable message for FLUX.1-Depth-dev / -Canny-dev gating failures."""
+    """Actionable message for FLUX.1-dev gated-repo failures."""
     return (
         f"{repo} is a gated model (FLUX.1-dev non-commercial license). "
         f"Visit https://huggingface.co/{repo}, accept the license, then run "
@@ -1095,6 +1251,73 @@ def _flux_gating_msg(repo: str) -> str:
         f"also enable 'access to public gated repositories' in the token "
         f"settings at https://huggingface.co/settings/tokens.)"
     )
+
+
+def _build_flux_union_pipeline(device: str, quantize: bool = False, dtype=None):
+    """Construct the FLUX.1-dev + Union ControlNet Pro pipeline.
+
+    Uses a single Union ControlNet that supports depth (mode 2) and canny
+    (mode 0) simultaneously. We wrap the single Union net in
+    ``FluxMultiControlNetModel`` and pass ``control_mode=[2, 0]`` to select
+    the conditioning type for each input image.
+
+    Memory/quantization behavior mirrors ``_build_flux_pipeline``:
+      * bf16 throughout (FLUX-native).
+      * ``--quantize`` FP8-quantizes transformer + T5-XXL (weights only).
+      * CPU keeps the full pipeline resident (~24 GB); no cpu-offload.
+
+    Returns ``(pipe, torch)``.
+    """
+    import torch
+    from diffusers import (
+        FluxControlNetModel,
+        FluxControlNetPipeline,
+        FluxMultiControlNetModel,
+    )
+    from huggingface_hub import errors as hf_errors
+
+    cfg = _model_config("flux-union")
+    load_dtype = dtype if dtype is not None else torch.bfloat16
+
+    gated_repos = {FLUX_UNION_MODEL_ID}
+    try:
+        union_cn = FluxControlNetModel.from_pretrained(
+            cfg["controlnet_id"], torch_dtype=load_dtype
+        )
+        controlnet = FluxMultiControlNetModel([union_cn])
+        pipe = FluxControlNetPipeline.from_pretrained(
+            cfg["base_id"],
+            controlnet=controlnet,
+            torch_dtype=load_dtype,
+        )
+    except hf_errors.GatedRepoError as exc:
+        raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+    except hf_errors.LocalEntryNotFoundError as exc:
+        if cfg["base_id"] in gated_repos:
+            raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+        raise
+    except hf_errors.HfHubHTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (401, 403):
+            raise RuntimeError(_flux_gating_msg(cfg["base_id"])) from exc
+        raise
+
+    if device == "cuda":
+        pipe = pipe.to("cuda")
+    elif device == "mps":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to("cpu")
+
+    if quantize:
+        from optimum.quanto import freeze, qfloat8, quantize
+
+        quantize(pipe.transformer, weights=qfloat8)
+        freeze(pipe.transformer)
+        if getattr(pipe, "text_encoder_2", None) is not None:
+            quantize(pipe.text_encoder_2, weights=qfloat8)
+            freeze(pipe.text_encoder_2)
+
+    return pipe, torch
 
 
 def _build_flux_pipeline(device: str, variant: str, quantize: bool = False, dtype=None):
@@ -1277,7 +1500,7 @@ def generate_image(
     canny_scale: float | None = None,
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
-    bin_resolution: bool = False,
+    bin_resolution: bool = True,
 ) -> Image.Image:
     """Regenerate a single image from *data*.
 
@@ -1297,10 +1520,12 @@ def generate_image(
         model: "sd15" (default), "sdxl", "zimage", "flux-depth", or
             "flux-canny". SDXL/FLUX both trained at 1024. FLUX is bf16 and
             takes a single depth OR canny conditioning image (not both).
-        bin_resolution: HunyuanDiT-only. When False (default) the requested
-            ``size`` is honored exactly; when True diffusers remaps it to
-            the nearest trained shape (e.g. 512x512 -> 1024x1024). Ignored
-            by all other backends.
+        bin_resolution: HunyuanDiT-only. When True (default) diffusers
+            remaps the requested ``size`` to the nearest trained shape
+            (e.g. 512x512 -> 1024x1024); when False the ``size`` is
+            honored exactly, which is off-distribution for HunyuanDiT
+            (trained at 1024) and can produce severe artifacts. Ignored by
+            all other backends.
     """
     if model == "zimage":
         return _generate_zimage(
@@ -1348,6 +1573,27 @@ def generate_image(
             steps=steps,
             device_override=device_override,
             guidance_scale=guidance_scale,
+        )
+    if model == "sd35":
+        return _generate_sd35(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+            canny_scale=canny_scale,
+        )
+    if model == "flux-union":
+        return _generate_flux_union(
+            data,
+            size=size,
+            steps=steps,
+            device_override=device_override,
+            quantize=quantize,
+            guidance_scale=guidance_scale,
+            depth_scale=depth_scale,
+            canny_scale=canny_scale,
         )
     if model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
         return _generate_flux(
@@ -1573,7 +1819,7 @@ def _generate_hunyuan(
     depth_scale: float | None,
     canny_scale: float | None,
     model: str = "hunyuan",
-    bin_resolution: bool = False,
+    bin_resolution: bool = True,
 ) -> Image.Image:
     """HunyuanDiT path: depth + canny ControlNets (two separate nets).
 
@@ -1582,10 +1828,12 @@ def _generate_hunyuan(
     Distilled, 25 steps) or "hunyuan-full" (v1.2 non-distilled, 50 steps).
 
     ``bin_resolution`` controls diffusers' ``use_resolution_binning``: when
-    False (default) the requested ``--size`` is honored exactly (e.g. 512x512),
-    which is off-distribution for HunyuanDiT (trained at 1024) but ~4x faster
-    and matches the user's explicit request. When True, diffusers remaps the
-    requested shape to the nearest trained shape (e.g. 512x512 -> 1024x1024).
+    True (default) diffusers remaps the requested ``--size`` to the nearest
+    trained shape (e.g. 512x512 -> 1024x1024), which is on-distribution and
+    artifact-free. When False, the requested size is honored exactly, which
+    is off-distribution for HunyuanDiT (trained at 1024) and can produce
+    severe artifacts (catastrophic noise); pass False only when you need the
+    ~4x speedup and accept the quality loss.
 
     CPU bf16 can produce a black/NaN frame on the non-distilled variant; if
     that happens we rebuild the pipeline at fp32 and retry once (same
@@ -1775,6 +2023,179 @@ def _generate_flux2(
     return image
 
 
+def _generate_sd35(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+    canny_scale: float | None,
+) -> Image.Image:
+    """Stable Diffusion 3.5 Large path: depth + canny ControlNets.
+
+    Loads the official SD3.5 depth and canny ControlNets separately and wraps
+    them in ``SD3MultiControlNetModel`` so both maps are fed simultaneously.
+    The blueprint's seg map is ignored (no SD3.5 seg ControlNet exists). bf16
+    throughout (SD3.5-native; sidesteps the MPS fp16 NaN bug). Uses CLIP-L,
+    CLIP-G, and T5-XXL text encoders (max 256 tokens).
+    """
+    import numpy as np
+
+    device = device_override or get_torch_device()
+    cfg = _model_config("sd35")
+
+    # SD 3.5 Large is trained at 1024²; forcing it to 512² produces a
+    # zoomed/cropped composition. Generate at the native resolution and
+    # downscale to the requested output size so framing matches the source.
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    gen_w, gen_h = compute_target_size(
+        data.original_width, data.original_height, override=None, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Depth + canny conditioning at the generation resolution. Seg is ignored.
+    conditioning = _load_conditioning_maps(data, gen_w, gen_h)[:2]
+    scales = [
+        depth_scale if depth_scale is not None else cfg["depth_scale"],
+        canny_scale if canny_scale is not None else cfg["canny_scale"],
+    ]
+
+    pipe, torch = _build_sd35_pipeline(device)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    def _run(_pipe, _gen):
+        return _pipe(
+            prompt=prompt,
+            control_image=conditioning,
+            controlnet_conditioning_scale=scales,
+            guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+            num_inference_steps=n_steps,
+            height=gen_h,
+            width=gen_w,
+            generator=_gen,
+        )
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = _run(pipe, gen)
+    image: Image.Image = result.images[0]
+
+    # CPU bf16 can emit a black/NaN frame on SD3.5 (observed on other MMDiT
+    # pipelines). Rebuild at fp32 and retry once -- same philosophy as the
+    # HunyuanDiT CPU bf16 recovery.
+    arr = np.asarray(image, dtype=np.float32)
+    if (not np.isfinite(arr).all()) or (arr.max() - arr.min() < 1.0):
+        if device == "cpu":
+            print(
+                "  note   : bf16 produced a black/NaN frame on CPU; "
+                "retrying in fp32 (slower, ~2x RAM)."
+            )
+            del pipe, result, gen
+            free_torch()
+            pipe, torch = _build_sd35_pipeline(device, dtype=torch.float32)
+            gen = torch.Generator(gen_device).manual_seed(data.seed)
+            result = _run(pipe, gen)
+            image = result.images[0]
+
+    if (image.width, image.height) != (target_w, target_h):
+        image = image.resize((target_w, target_h), Image.LANCZOS)
+
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
+def _generate_flux_union(
+    data: BrainimgData,
+    size: str | None,
+    steps: int | None,
+    device_override: str | None,
+    quantize: bool,
+    guidance_scale: float | None,
+    depth_scale: float | None,
+    canny_scale: float | None,
+) -> Image.Image:
+    """FLUX Union ControlNet path: depth + canny via a single Union net.
+
+    Uses ``Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro`` with
+    ``FluxMultiControlNetModel`` and ``control_mode=[2, 0]`` to feed depth
+    (mode 2) and canny (mode 0) at the same time. The blueprint's seg map is
+    ignored (no seg mode in the Union net). bf16 throughout, 1024-native.
+    """
+    import numpy as np
+
+    device = device_override or get_torch_device()
+    cfg = _model_config("flux-union")
+
+    target_w, target_h = compute_target_size(
+        data.original_width, data.original_height, size, max_side=cfg["max_side"]
+    )
+    n_steps = steps or cfg["default_steps"]
+
+    # Depth + canny conditioning. Seg is ignored on this path.
+    conditioning = _load_conditioning_maps(data, target_w, target_h)[:2]
+    scales = [
+        depth_scale if depth_scale is not None else cfg["depth_scale"],
+        canny_scale if canny_scale is not None else cfg["canny_scale"],
+    ]
+    modes = [cfg["depth_mode"], cfg["canny_mode"]]
+
+    pipe, torch = _build_flux_union_pipeline(device, quantize=quantize)
+
+    prompt = _build_prompt(data, pipe.tokenizer, max_tokens=cfg["max_tokens"])
+
+    def _run(_pipe, _gen):
+        return _pipe(
+            prompt=prompt,
+            prompt_2=prompt,
+            control_image=conditioning,
+            control_mode=modes,
+            controlnet_conditioning_scale=scales,
+            guidance_scale=guidance_scale if guidance_scale is not None else cfg["guidance"],
+            num_inference_steps=n_steps,
+            height=target_h,
+            width=target_w,
+            generator=_gen,
+        )
+
+    gen_device = "cpu" if device in ("mps", "cpu") else device
+    gen = torch.Generator(gen_device).manual_seed(data.seed)
+    result = _run(pipe, gen)
+    image: Image.Image = result.images[0]
+
+    # CPU bf16 can emit a black/NaN frame (observed on flux-canny). Rebuild at
+    # fp32 and retry once -- same philosophy as the HunyuanDiT CPU bf16 recovery.
+    arr = np.asarray(image, dtype=np.float32)
+    if (not np.isfinite(arr).all()) or (arr.max() - arr.min() < 1.0):
+        if device == "cpu":
+            print(
+                "  note   : bf16 produced a black/NaN frame on CPU; "
+                "retrying in fp32 (slower, ~2x RAM)."
+            )
+            del pipe, result, gen
+            free_torch()
+            pipe, torch = _build_flux_union_pipeline(device, quantize=False, dtype=torch.float32)
+            gen = torch.Generator(gen_device).manual_seed(data.seed)
+            result = _run(pipe, gen)
+            image = result.images[0]
+
+    image = _match_color_statistics(
+        image, data.target_brightness, data.target_saturation
+    )
+
+    del pipe
+    free_torch()
+    return image
+
+
 def _generate_flux(
     data: BrainimgData,
     size: str | None,
@@ -1889,7 +2310,7 @@ def decode_brainimg(
     canny_scale: float | None = None,
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
-    bin_resolution: bool = False,
+    bin_resolution: bool = True,
 ) -> tuple[BrainimgData, Image.Image]:
     """Read *path*, regenerate the image, save it to *out_path*."""
     data = load_brainimg(path)

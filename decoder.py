@@ -97,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
             "flux-canny",
             "flux-depth-turbo",
             "flux-canny-turbo",
+            "sd35",
+            "flux-union",
         ],
         default="sd15",
         help="base diffusion model: 'sd15' (default, ~3.5 GB, 512) or 'sdxl' "
@@ -116,9 +118,11 @@ def main(argv: list[str] | None = None) -> int:
         "two-conditioner pattern as sd15/sdxl; seg map ignored). bf16, "
         "BERT + T5 text encoders. Needs ~12 GB RAM resident on CPU. "
         "'hunyuan-full' is the non-distilled variant (50 steps, same "
-        "ControlNets). HunyuanDiT honors --size exactly by default (off "
-        "its 1024-trained distribution); pass --bin-resolution to remap "
-        "to the nearest trained shape. "
+        "ControlNets). HunyuanDiT defaults to resolution binning (remaps "
+        "--size to the nearest trained shape, e.g. 512x512 -> 1024x1024, "
+        "on-distribution and artifact-free); pass --no-bin-resolution to "
+        "honor --size exactly (off-distribution, ~4x faster but can produce "
+        "severe artifacts). "
         "'sana' uses NVIDIA's SANA 600M (MIT, linear DiT) "
         "with an HED ControlNet -- the only available ControlNet type for "
         "SANA. The blueprint's canny map is fed to the HED ControlNet "
@@ -136,17 +140,25 @@ def main(argv: list[str] | None = None) -> int:
         "control, one image). 'flux-depth-turbo' / 'flux-canny-turbo' add "
         "Hyper-SD's 8-step FLUX LoRA on top of the same control pipeline "
         "-- drops FLUX from 30 to 8 steps, guidance 3.5 (the dev default). "
-        "~4-5x faster on CPU.",
+        "~4-5x faster on CPU. "
+        "'sd35' uses Stable Diffusion 3.5 Large (8B MMDiT) + official "
+        "depth + canny ControlNets (two 8B nets, fed simultaneously via "
+        "SD3MultiControlNetModel). 1024-native, 50 steps, guidance 4.5, "
+        "bf16, gated (Stability AI community license). ~16-20 GB RAM on CPU. "
+        "'flux-union' uses FLUX.1-dev + Shakker-Labs Union ControlNet "
+        "(depth mode 2 + canny mode 0 fed simultaneously). 24 steps, "
+        "guidance 3.5, bf16, gated (FLUX non-commercial). ~24 GB RAM on CPU "
+        "(~12 GB with --quantize).",
     )
     parser.add_argument(
-        "--bin-resolution",
+        "--no-bin-resolution",
         action="store_true",
-        help="HunyuanDiT-only. By default HunyuanDiT honors --size exactly "
-        "(e.g. 512x512), which is off its 1024-trained distribution but "
-        "faster. Pass --bin-resolution to let diffusers remap the requested "
-        "shape to the nearest trained shape (e.g. 512x512 -> 1024x1024), "
-        "restoring on-distribution quality at the cost of runtime. Ignored "
-        "by all other backends.",
+        help="HunyuanDiT-only. By default HunyuanDiT uses resolution binning "
+        "(diffusers remaps --size to the nearest trained shape, e.g. "
+        "512x512 -> 1024x1024), which is on-distribution and artifact-free. "
+        "Pass --no-bin-resolution to honor --size exactly -- off-distribution "
+        "for HunyuanDiT (trained at 1024) and can produce severe artifacts "
+        "(catastrophic noise), but ~4x faster. Ignored by all other backends.",
     )
     args = parser.parse_args(argv)
 
@@ -162,10 +174,16 @@ def main(argv: list[str] | None = None) -> int:
         else (get_torch_device() if args.device == "auto" else args.device)
     )
 
-    if args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo"):
+    if args.model in (
+        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo", "flux-union",
+    ):
         # FLUX is bf16; --quantize FP8's the transformer + T5 (the big two).
         # Turbo variants add the Hyper-SD FLUX 8-step LoRA on top.
         turbo_suffix = " + Hyper-SD 8-step LoRA" if args.model.endswith("-turbo") else ""
+        if args.model == "flux-union":
+            ram_note = "~24 GB" if not args.quantize else "~12 GB"
+        else:
+            ram_note = "~22 GB" if not args.quantize else "~12 GB"
         if args.quantize:
             mode = f"bf16 + FP8 weights (transformer + T5){turbo_suffix}"
         elif device == "cuda":
@@ -173,7 +191,15 @@ def main(argv: list[str] | None = None) -> int:
         elif device == "mps":
             mode = f"bf16 + cpu-offload{turbo_suffix}"
         else:
-            mode = f"bf16 (resident in RAM, ~22 GB){turbo_suffix}"
+            mode = f"bf16 (resident in RAM, {ram_note}){turbo_suffix}"
+    elif args.model == "sd35":
+        # SD3.5 Large: bf16, depth + canny ControlNets, 3 text encoders.
+        if device == "cuda":
+            mode = "bf16"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload"
+        else:
+            mode = "bf16 (resident in RAM, ~16-20 GB)"
     elif args.model in ("hunyuan", "hunyuan-full"):
         # HunyuanDiT: bf16, depth + canny ControlNets (two separate nets).
         variant = "distilled (25-step)" if args.model == "hunyuan" else "full (50-step)"
@@ -243,9 +269,11 @@ def main(argv: list[str] | None = None) -> int:
         "flux2-klein",
         "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
+        "sd35", "flux-union",
     ):
-        # Z-Image + Qwen-Image + FLUX (+ turbo) ignore the file's stored step
-        # count (tuned for SD 1.5); show the effective step count they use.
+        # Z-Image + Qwen-Image + FLUX (+ turbo) + SD3.5 + FLUX-Union ignore
+        # the file's stored step count (tuned for SD 1.5); show the effective
+        # step count they use.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
     elif args.model in ("sd15-turbo", "sdxl-turbo"):
@@ -263,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
             "flux2-klein",
             "flux-depth", "flux-canny",
+            "sd35", "flux-union",
         )
         and args.model not in ("sd15-turbo", "sdxl-turbo")
         and args.model not in ("flux-depth-turbo", "flux-canny-turbo")
@@ -290,10 +319,11 @@ def main(argv: list[str] | None = None) -> int:
         print("  note   : HunyuanDiT on CPU keeps the whole bf16 pipeline in RAM (~12 GB).")
     if args.model in ("hunyuan", "hunyuan-full"):
         print("  note   : HunyuanDiT uses depth + canny; seg map is ignored (no seg ControlNet).")
-    if args.model in ("hunyuan", "hunyuan-full") and not args.bin_resolution:
+    if args.model in ("hunyuan", "hunyuan-full") and args.no_bin_resolution:
         print(
-            "  note   : --bin-resolution off; --size is honored exactly "
-            "(HunyuanDiT trained at 1024, off-distribution PSNR may drop)."
+            "  note   : --no-bin-resolution set; --size is honored exactly "
+            "(HunyuanDiT trained at 1024, off-distribution -- can produce "
+            "severe artifacts)."
         )
     if args.model == "sana" and device != "cuda":
         print("  note   : SANA without CUDA is slow (20 steps on CPU).")
@@ -319,21 +349,34 @@ def main(argv: list[str] | None = None) -> int:
             f"({other}/seg maps ignored). Add --quantize on CPU to drop RAM "
             f"from ~22 GB to ~12 GB via FP8 (transformer + T5)."
         )
-    if (
-        args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo")
-        and device == "cpu"
-        and not args.quantize
-    ):
+    if args.model == "flux-union":
         print(
-            "  note   : FLUX on CPU without --quantize keeps the full bf16 pipeline "
-            "in RAM (~22 GB)."
+            "  note   : FLUX Union is bf16; uses depth (mode 2) + canny (mode 0) "
+            "simultaneously via a single Union ControlNet (seg map ignored). "
+            "Add --quantize on CPU to drop RAM from ~24 GB to ~12 GB via FP8."
         )
-    if (
-        args.model in ("flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo")
-        and device == "mps"
-    ):
+    _flux_models = (
+        "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo", "flux-union",
+    )
+    if args.model in _flux_models and device == "cpu" and not args.quantize:
+        ram = "~24 GB" if args.model == "flux-union" else "~22 GB"
+        print(
+            f"  note   : FLUX on CPU without --quantize keeps the full bf16 pipeline "
+            f"in RAM ({ram})."
+        )
+    if args.model in _flux_models and device == "mps":
         print(
             "  note   : FLUX on MPS streams layers host<->device; "
+            "8 GB Apple Silicon not supported (use --model sd15)."
+        )
+    if args.model == "sd35":
+        print(
+            "  note   : SD3.5 is bf16; uses depth + canny ControlNets simultaneously "
+            "(seg map ignored). Needs ~16-20 GB RAM resident on CPU."
+        )
+    if args.model == "sd35" and device == "mps":
+        print(
+            "  note   : SD3.5 on MPS streams layers host<->device; "
             "8 GB Apple Silicon not supported (use --model sd15)."
         )
 
@@ -350,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         canny_scale=args.canny_scale,
         seg_scale=args.seg_scale,
         model=args.model,
-        bin_resolution=args.bin_resolution,
+        bin_resolution=not args.no_bin_resolution,
     )
     dt = time.time() - t0
 

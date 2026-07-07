@@ -24,13 +24,13 @@ DEFAULT_BACKENDS = [
     ("SDXL turbo (8-step)", "sdxl-turbo"),
     ("Z-Image (depth-only)", "zimage"),
     ("Qwen-Image (depth-only)", "qwen-image"),
-    ("HunyuanDiT (depth+canny)", "hunyuan"),
-    ("HunyuanDiT full (depth+canny)", "hunyuan-full"),
     ("SANA (HED/canny)", "sana"),
     ("FLUX.2-klein (img2img)", "flux2-klein"),
     ("FLUX depth (FP8)", "flux-depth"),
     ("FLUX depth turbo (FP8)", "flux-depth-turbo"),
     ("FLUX canny (FP8)", "flux-canny"),
+    ("FLUX Union (depth+canny)", "flux-union"),
+    ("SD 3.5 (depth+canny)", "sd35"),
 ]
 
 

@@ -18,7 +18,26 @@ from brainimg.generate import (
     FLUX_TURBO_DEFAULT_STEPS,
     FLUX_TURBO_GUIDANCE_SCALE,
     FLUX_TURBO_LORA_FILE,
+    FLUX_UNION_CANNY_MODE,
+    FLUX_UNION_CANNY_SCALE,
+    FLUX_UNION_CONTROLNET_ID,
+    FLUX_UNION_DEFAULT_STEPS,
+    FLUX_UNION_DEPTH_MODE,
+    FLUX_UNION_DEPTH_SCALE,
+    FLUX_UNION_GUIDANCE_SCALE,
+    FLUX_UNION_MAX_DEFAULT_SIDE,
+    FLUX_UNION_MAX_TOKENS,
+    FLUX_UNION_MODEL_ID,
     HYPER_SD_REPO,
+    SD35_CONTROLNET_CANNY_ID,
+    SD35_CONTROLNET_CANNY_SCALE,
+    SD35_CONTROLNET_DEPTH_ID,
+    SD35_CONTROLNET_DEPTH_SCALE,
+    SD35_DEFAULT_STEPS,
+    SD35_GUIDANCE_SCALE,
+    SD35_MAX_DEFAULT_SIDE,
+    SD35_MAX_TOKENS,
+    SD35_MODEL_ID,
     _model_config,
 )
 
@@ -123,10 +142,45 @@ def test_all_model_configs_carry_turbo_flag():
         "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
         "hunyuan", "hunyuan-full", "sana", "flux2-klein",
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
+        "sd35", "flux-union",
     ):
         cfg = _model_config(model)
         assert "turbo" in cfg, f"{model} config missing turbo key"
         assert isinstance(cfg["turbo"], bool)
+
+
+def test_sd35_config_shape():
+    """SD3.5 config: two separate 8B ControlNets (depth + canny) wrapped in
+    SD3MultiControlNetModel. bf16, 1024-native, gated."""
+    cfg = _model_config("sd35")
+    assert cfg["base_id"] == SD35_MODEL_ID
+    assert cfg["depth_id"] == SD35_CONTROLNET_DEPTH_ID
+    assert cfg["canny_id"] == SD35_CONTROLNET_CANNY_ID
+    assert cfg["depth_scale"] == SD35_CONTROLNET_DEPTH_SCALE
+    assert cfg["canny_scale"] == SD35_CONTROLNET_CANNY_SCALE
+    assert cfg["seg_scale"] is None
+    assert cfg["guidance"] == SD35_GUIDANCE_SCALE
+    assert cfg["max_side"] == SD35_MAX_DEFAULT_SIDE
+    assert cfg["default_steps"] == SD35_DEFAULT_STEPS
+    assert cfg["max_tokens"] == SD35_MAX_TOKENS
+    assert cfg["turbo"] is False
+
+
+def test_flux_union_config_shape():
+    """FLUX-Union config: single Union ControlNet with depth/canny modes."""
+    cfg = _model_config("flux-union")
+    assert cfg["base_id"] == FLUX_UNION_MODEL_ID
+    assert cfg["controlnet_id"] == FLUX_UNION_CONTROLNET_ID
+    assert cfg["depth_scale"] == FLUX_UNION_DEPTH_SCALE
+    assert cfg["canny_scale"] == FLUX_UNION_CANNY_SCALE
+    assert cfg["depth_mode"] == FLUX_UNION_DEPTH_MODE
+    assert cfg["canny_mode"] == FLUX_UNION_CANNY_MODE
+    assert cfg["seg_scale"] is None
+    assert cfg["guidance"] == FLUX_UNION_GUIDANCE_SCALE
+    assert cfg["max_side"] == FLUX_UNION_MAX_DEFAULT_SIDE
+    assert cfg["default_steps"] == FLUX_UNION_DEFAULT_STEPS
+    assert cfg["max_tokens"] == FLUX_UNION_MAX_TOKENS
+    assert cfg["turbo"] is False
 
 
 def test_hunyuan_config_shape():
@@ -140,7 +194,7 @@ def test_hunyuan_config_shape():
     assert cfg["depth_scale"] == 0.8
     assert cfg["canny_scale"] == 0.8
     assert cfg["seg_scale"] is None
-    assert cfg["guidance"] == 6.0
+    assert cfg["guidance"] == 3.0
     assert cfg["max_side"] == 1024
     assert cfg["default_steps"] == 25
     assert cfg["turbo"] is False

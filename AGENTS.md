@@ -44,7 +44,7 @@ for the full project description and `TODO.md` for planned decode-quality work.
 - `encoder.py` / `decoder.py` are the CLI entrypoints; the `brainimg/` package holds
   `format.py` (schema, ML-free), `device.py` (torch/mlx device + memory helpers),
   `extract.py` (encoder stages), `generate.py` (SD + ControlNet decoder).
-- `brainimg/generate.py` has five decoder backends gated by `--model`:
+- `brainimg/generate.py` has decoder backends gated by `--model`:
   `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
   `sd15-turbo` / `sdxl-turbo` (same base + ControlNets + ByteDance Hyper-SD
   8-step distilled LoRA, DDIM trailing schedule), `zimage` (Z-Image-Turbo 6B
@@ -54,19 +54,26 @@ for the full project description and `TODO.md` for planned decode-quality work.
   DiT, HED ControlNet fed the canny map — only edge ControlNet available),
   `flux2-klein` (FLUX.2-klein-4B img2img, depth map as starting image — no
   ControlNet, experimental pseudo-ControlNet), `flux-depth` / `flux-canny`
-  (FLUX.1 Control variants, channel-concat, one conditioning image), and
+  (FLUX.1 Control variants, channel-concat, one conditioning image),
   `flux-depth-turbo` / `flux-canny-turbo` (FLUX Control + Hyper-SD 8-step
   FLUX LoRA, strips x_embedder/context_embedder deltas that are
-  shape-incompatible with the Control transformer).
+  shape-incompatible with the Control transformer), `sd35` (Stable Diffusion
+  3.5 Large + two separate 8B depth/canny ControlNets wrapped in
+  `SD3MultiControlNetModel`), and `flux-union` (FLUX.1-dev + Shakker-Labs
+  Union ControlNet, depth mode 2 + canny mode 0 via
+  `FluxMultiControlNetModel`).
   The zimage path lives in `_generate_zimage` / `_build_zimage_pipeline`,
   the qwen-image path in `_generate_qwen_image` / `_build_qwen_image_pipeline`,
   the hunyuan path in `_generate_hunyuan` / `_build_hunyuan_pipeline`,
   the sana path in `_generate_sana` / `_build_sana_pipeline`,
   the flux2-klein path in `_generate_flux2` / `_build_flux2_pipeline`,
-  the FLUX path in `_generate_flux` / `_build_flux_pipeline`, and the
-  SD path (which also serves `*-turbo` via a `cfg["turbo"]` flag) in
+  the FLUX path in `_generate_flux` / `_build_flux_pipeline`,
+  the SD3.5 path in `_generate_sd35` / `_build_sd35_pipeline`,
+  the FLUX-Union path in `_generate_flux_union` / `_build_flux_union_pipeline`,
+  and the SD path (which also serves `*-turbo` via a `cfg["turbo"]` flag) in
   `_generate_sd` / `_build_pipeline`. Schema is unchanged — zimage/FLUX/
-  qwen-image/hunyuan/sana/flux2-klein simply ignore the maps they don't use.
+  qwen-image/hunyuan/sana/flux2-klein/sd35/flux-union simply ignore the maps
+  they don't use.
 - **Encoder and decoder must stay separate processes** — models are never
   resident together (historical 8 GB Apple Silicon constraint; on the AMD CPU
   target with 188 GB this is less critical but still a clean separation).
@@ -128,16 +135,17 @@ for the full project description and `TODO.md` for planned decode-quality work.
   types) loads cleanly and is what the code pins. Re-evaluate if a future
   diffusers release adds the lite configs.
 - **HunyuanDiT size handling + CPU bf16 black frame**: by default `--model
-  hunyuan` / `hunyuan-full` honors `--size` exactly (diffusers'
-  `use_resolution_binning=False`). HunyuanDiT was trained at 1024²; running
-  it at 512² is off-distribution (PSNR drops ~1-2 dB) but ~4× faster, which
-  is what CPU iteration needs. Pass `--bin-resolution` to let diffusers
-  remap to the nearest trained shape (e.g. 512² → 1024²). The non-distilled
-  `hunyuan-full` variant can emit a black/NaN frame under bf16 on CPU
-  (the distilled path has not been observed to); `_generate_hunyuan`
-  detects this and retries once at fp32 (~2× RAM/runtime, numerically
-  safe) — the same recovery philosophy as the SD 1.5 MPS fp16-NaN handling,
-  applied to CPU bf16.
+  hunyuan` / `hunyuan-full` uses resolution binning (diffusers'
+  `use_resolution_binning=True`), remapping `--size` to the nearest trained
+  shape (e.g. 512² → 1024²). HunyuanDiT was trained at 1024²; running it at
+  512² is off-distribution and produces **severe artifacts** (catastrophic
+  noise, not just a PSNR drop) — forcing 512² with `--no-bin-resolution` is
+  ~4× faster but visually broken. Keep binning on (the default) for usable
+  output. The non-distilled `hunyuan-full` variant can emit a black/NaN frame
+  under bf16 on CPU (the distilled path has not been observed to);
+  `_generate_hunyuan` detects this and retries once at fp32 (~2× RAM/runtime,
+  numerically safe) — the same recovery philosophy as the SD 1.5 MPS fp16-NaN
+  handling, applied to CPU bf16.
 - **SANA HED/canny mismatch**: `--model sana` uses NVIDIA's SANA 600M (MIT,
   linear DiT) with an HED (soft-edge) ControlNet — the only ControlNet type
   available for SANA. The blueprint's canny map is fed to the HED ControlNet
@@ -163,6 +171,25 @@ for the full project description and `TODO.md` for planned decode-quality work.
   catches `GatedRepoError` and raises a clear `RuntimeError` with the
   license URL + `huggingface-cli login` instructions instead of a raw
   401 traceback.
+- **FLUX-Union multi-control**: `--model flux-union` uses FLUX.1-dev base
+  (gated, same license as flux-depth/flux-canny) + Shakker-Labs Union
+  ControlNet. The Union net supports 7 modes; we feed depth (mode 2) and
+  canny (mode 0) simultaneously via `FluxMultiControlNetModel` and
+  `control_mode=[2, 0]`. The seg map is ignored. `--quantize` works the
+  same as the other FLUX paths (FP8 weights on transformer + T5-XXL).
+  `_generate_flux_union` includes the same CPU bf16 black-frame retry as
+  `_generate_flux`.
+- **SD3.5 ControlNet gating + memory + resolution**: `--model sd35` uses
+  `stabilityai/stable-diffusion-3.5-large` (8B MMDiT) + two separate 8B
+  depth/canny ControlNets, wrapped in `SD3MultiControlNetModel`. All three
+  repos are gated (Stability AI community license). The base plus both
+  ControlNets plus CLIP-L/CLIP-G/T5-XXL totals ~16-20 GB resident in host
+  RAM on CPU bf16. SD3.5 is bf16-native, so no MPS fp16 NaN issue. The seg
+  map is ignored (no SD3.5 seg ControlNet). `_generate_sd35` always
+  generates at the native 1024² resolution and downscales to the requested
+  output size; generating at 512² produces a zoomed/cropped composition.
+  `_generate_sd35` includes the same CPU bf16 black-frame retry as
+  `_generate_hunyuan`.
 - **FLUX.2-klein img2img pseudo-ControlNet**: `--model flux2-klein` uses
   FLUX.2-klein-4B (Apache 2.0, ungated, 4B, 4-step distilled) as an
   image-to-image model, feeding the blueprint's depth map as the starting

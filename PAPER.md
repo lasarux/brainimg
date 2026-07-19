@@ -1,9 +1,12 @@
+<!-- Canonical source: PAPER.typ. This Markdown is a mirror for GitHub
+     rendering; if it drifts, PAPER.typ wins. -->
+
 ---
 title: "brainimg: A Reproducible Systems Study of Generative-Recall Image Compression"
 authors:
   - name: Pedro A. Gracia Fajardo
     email: lasarux@gmail.com
-date: 2026-06-21
+date: 2026-07-19
 abstract: |
   Classical image formats store pixels—either directly, as transform coefficients,
   or as latent codes—and are therefore resolution-bound and tied to the exact
@@ -15,7 +18,7 @@ abstract: |
   Diffusion 1.5 (default) or SDXL with two-to-three ControlNets, either of
   those plus ByteDance's Hyper-SD 8-step distilled LoRA (turbo), Z-Image-Turbo
   with a single Union ControlNet, Qwen-Image (Apache 2.0) with InstantX's
-  Union ControlNet, HunyuanDiT v1.2 (distilled and full) with separate depth +
+  Union ControlNet, HunyuanDiT v1.2 with separate depth +
   canny ControlNets, NVIDIA SANA 600M with an HED ControlNet fed the canny
   map, FLUX.2-klein-4B as an img2img pseudo-ControlNet fed the depth map, or
   FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat conditioning,
@@ -30,8 +33,8 @@ abstract: |
   targets. Using measurements reproducible from the committed repository on an
   AMD x86_64 CPU-only target with 188 GB RAM, we report blueprint sizes of
   2.7–8.4 KB (compression ratios of 2.2×–102.8×), deterministic reconstruction
-  given a fixed seed, and a per-backend fidelity and speed comparison on three
-  classic USC-SIPI test images (mandril, peppers, cameraman) in which
+  given a fixed seed, and a per-backend fidelity and speed comparison on four
+  classic USC-SIPI test images (mandril, peppers, cameraman, airplane) in which
   Hyper-SD 8-step distilled schedules *beat* their 30-step counterparts on
   SD 1.5 (+0.54 dB), and a ControlNet scale sweep finds that lower depth
   scales (0.8 vs 1.5) improve fidelity with the Depth-Anything-V2-Base stack. We are explicit that brainimg
@@ -272,18 +275,21 @@ and the same brightness/saturation post-processing:
 | `zimage` | `Tongyi-MAI/Z-Image-Turbo` | single Union ControlNet (depth) | 9 (8-step Turbo) | Tongyi-MAI non-commercial |
 | `qwen-image` | `Qwen/Qwen-Image` | single Union ControlNet (depth) | 50 | **Apache 2.0** |
 | `hunyuan` | `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled` | depth + canny ControlNets | 25 | tencent-hunyuan-community |
-| `hunyuan-full` | `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers` | depth + canny ControlNets | 50 | tencent-hunyuan-community |
 | `sana` | `Efficient-Large-Model/Sana_600M_1024px_diffusers` | single HED ControlNet (canny map) | 20 | **MIT** |
 | `flux2-klein` | `black-forest-labs/FLUX.2-klein-4B` | img2img (depth map as starting image) | 4 | **Apache 2.0** |
 | `flux-depth` | `black-forest-labs/FLUX.1-Depth-dev` | channel-concat `depth_map_b64` | 30 | FLUX.1-dev non-commercial |
 | `flux-canny` | `black-forest-labs/FLUX.1-Canny-dev` | channel-concat `canny_map_b64` | 30 | FLUX.1-dev non-commercial |
 | `flux-depth-turbo` | FLUX.1-Depth-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `depth_map_b64` | 8 | FLUX.1-dev non-commercial |
-| `flux-canny-turbo` | FLUX.1-Canny-dev + Hyper-SD 8-step FLUX LoRA | channel-concat `canny_map_b64` | 8 | FLUX.1-dev non-commercial |
 | `flux-union` | `black-forest-labs/FLUX.1-dev` + Shakker-Labs Union ControlNet | Union ControlNet (depth + canny) | 24 | FLUX.1-dev non-commercial |
 | `sd35` | `stabilityai/stable-diffusion-3.5-large` | depth + canny ControlNets | 50 | stabilityai-ai-community |
 
-All sixteen backends consume the **same blueprint**; the schema is unchanged
-when a new decoder is added. We describe the SD 1.5 / SDXL path in detail
+All fourteen backends consume the **same blueprint**; the schema is unchanged
+when a new decoder is added. Two additional CLI variants of the counted
+backends are supported by `decoder.py` but not enumerated as separate paper
+backends: `--model hunyuan-full` (the non-distilled 50-step HunyuanDiT
+v1.2, used in §4.6 to isolate the distillation artefact) and `--model
+flux-canny-turbo` (Hyper-SD 8-step LoRA on `FLUX.1-Canny-dev`, the
+canny-channel counterpart of `flux-depth-turbo`). We describe the SD 1.5 / SDXL path in detail
 (the historical default), then summarise the turbo, Z-Image, Qwen-Image,
 HunyuanDiT, SANA, FLUX.2-klein, and FLUX paths that diverge structurally.
 
@@ -481,10 +487,10 @@ the official NVlabs checkpoint; the base model is the diffusers port from
 `Efficient-Large-Model`. bf16 throughout. Defaults: HED scale 0.4 (tuned via
 sweep on the SIPI samples at 1024² — §4.8), `guidance_scale = 4.5`, 20 steps, 1024 max
 side, `max_sequence_length = 300`. SANA is the fastest 1024-native backend
-(52 s at 1024², ~5 GB RAM) but the lowest-PSNR backend due to the HED/canny
+(54 s at 1024², ~5 GB RAM) but the lowest-PSNR backend due to the HED/canny
 mismatch.
 
-### 3.3.8 FLUX.2-klein-4B (img2img pseudo-ControlNet, Apache 2.0)
+### 3.3.10 FLUX.2-klein-4B (img2img pseudo-ControlNet, Apache 2.0)
 
 `--model flux2-klein` loads Black Forest Labs' **FLUX.2-klein-4B**
 (Apache 2.0, ungated, 4 B-parameter rectified-flow transformer, 4-step
@@ -521,16 +527,16 @@ offload *to*).
 | `--device` / `--model` | Precision | RAM | Speed | Fidelity |
 |---|---|---|---|---|
 | `cpu` (sd15, default target) | fp32 (no quant) | ~10 GB | 156 s @ 512² | **best** (sd15) |
-| `cpu --model sd15-turbo` | fp32 + Hyper-SD 8-step LoRA | ~10 GB | **50 s** @ 512² | good (+0.95 dB vs 30-step) |
-| `cpu --model sdxl` | fp32 (no quant) | ~17 GB | 220 s @ 512² | **best** (sdxl) |
-| `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **69 s** @ 512² | good (−0.23 dB vs 30-step) |
-| `cpu --model zimage` | bf16 resident | ~18 GB | 237 s @ 512² | good (depth-only) |
-| `cpu --model qwen-image` | bf16 resident | ~20 GB | 1436 s @ 512² | good (depth-only) |
-| `cpu --model hunyuan` | bf16 resident | ~12 GB | 1004 s @ 1024² | good PSNR, poor visual (§4.6) |
-| `cpu --model sana` | bf16 resident | ~5 GB | **52 s** @ 1024² | lowest PSNR (HED/canny mismatch) |
-| `cpu --model flux2-klein` | bf16 resident | ~13 GB | 240 s @ 512² | good PSNR, poor colour |
-| `cpu --model flux-depth --quantize` | bf16 + FP8 (host RAM) | ~12 GB | 654 s @ 512² | **best** (FLUX) |
-| `cpu --model flux-depth-turbo --quantize` | bf16 + FP8 + Hyper-SD 8-step | ~12 GB | **166 s** @ 512² | **best+** (+1.41 dB vs 30-step) |
+| `cpu --model sd15-turbo` | fp32 + Hyper-SD 8-step LoRA | ~10 GB | **51 s** @ 512² | good (+0.54 dB vs 30-step) |
+| `cpu --model sdxl` | fp32 (no quant) | ~17 GB | 989 s @ 512² | **best** (sdxl) |
+| `cpu --model sdxl-turbo` | fp32 + Hyper-SD 8-step LoRA | ~17 GB | **76 s** @ 512² | good (−2.58 dB vs 30-step) |
+| `cpu --model zimage` | bf16 resident | ~18 GB | 308 s @ 512² | good (depth-only) |
+| `cpu --model qwen-image` | bf16 resident | ~20 GB | 1006 s @ 512² | good (depth-only) |
+| `cpu --model hunyuan` | bf16 resident | ~12 GB | 912 s @ 1024² | good PSNR, poor visual (§4.6) |
+| `cpu --model sana` | bf16 resident | ~5 GB | **54 s** @ 1024² | lowest PSNR (HED/canny mismatch) |
+| `cpu --model flux2-klein` | bf16 resident | ~13 GB | 42 s @ 512² | good PSNR, poor colour |
+| `cpu --model flux-depth --quantize` | bf16 + FP8 (host RAM) | ~12 GB | 510 s @ 512² | **best** (FLUX) |
+| `cpu --model flux-depth-turbo --quantize` | bf16 + FP8 + Hyper-SD 8-step | ~12 GB | **475 s** @ 512² | within noise of 30-step |
 | `cpu --model flux-union --quantize` | bf16 + FP8 (host RAM) | ~12 GB | ~860 s @ 512² | mid PSNR |
 | `cpu --model sd35` | bf16 resident | ~16-20 GB | ~3100 s @ 1024²→512² | mid PSNR, can zoom at 512² |
 | `mps` (sd15, Apple Silicon) | int8 weights + activations | ~5 GB | medium (8 GB Mac) | fair |
@@ -606,54 +612,33 @@ is a direct consequence of storing meaning rather than pixels.
 ## 4.3 Reconstruction quality (qualitative)
 
 Reconstruction is semantically faithful (same scene, layout, and lighting)
-but not pixel-identical—by design. The project ships side-by-side comparison
-assets, which we reference here as figures:
+but not pixel-identical—by design. The committed repository ships one
+side-by-side figure:
 
 - `comparison.jpg` — original vs. brainimg reconstruction of `samples/real.jpg`.
   Per `README.md`, the captioner correctly described the scene ("a black puppy
   sitting on a wooden surface") and the decoder produced a visually faithful
   reconstruction at 256×256 in 59 s on the M1/8 GB machine.
-- `mandril_sd15_comparison.jpg`, `mandril_sd15-turbo_comparison.jpg` — 512²
-  SD 1.5 reconstructions of the SIPI mandril (30-step and 8-step turbo).
-- `mandril_sdxl_comparison.jpg`, `mandril_sdxl.png` — an SDXL run on
-  `mandril.brainimg` at 1024×1024 fp32, verified deterministic (identical md5
-  across runs, colour stats matched targets) per `TODO.md` Tier 3.
-- `mandril_zimage_comparison.jpg`, `mandril_zimage.png` — a Z-Image-Turbo run on
-  `mandril.brainimg` at 512×512 bf16 (8-step Turbo schedule; depth-only
-  conditioning; canny + seg maps ignored per §3.3.2).
-- `mandril_sdxl-turbo_comparison.jpg`, `mandril_sdxl-turbo.png` — SDXL turbo
-  at 512×512, the same resolution as the SD 1.5 default, allowing a
-  like-for-like comparison (§4.7 below).
-- `mandril_flux-depth_comparison.jpg`, `mandril_flux-depth.png` — FLUX.1-Depth-dev
-  at 512×512 with FP8-quantized transformer + T5-XXL (`--quantize`).
-- `mandril_hunyuan_comparison.jpg`, `mandril_hunyuan.png` — HunyuanDiT v1.2
-  Distilled on `mandril.brainimg` at 1024×1024 bf16 (25-step distilled
-  schedule; depth + canny ControlNets; seg ignored per §3.3.6). Despite
-  scoring mid-pack by PSNR (§4.7) the reconstruction shows visible artefacts
-  and palette collapse — a concrete pixel-metric-vs-perceptual disconnect
-  (§4.6).
-- `mandril_sana_comparison.jpg`, `mandril_sana.png` — SANA 600M on
-  `mandril.brainimg` at 1024×1024 bf16 (20-step, HED ControlNet fed the canny
-  map; depth + seg ignored per §3.3.7). The HED/canny mismatch produces the
-  lowest PSNR of any backend.
-- `mandril_flux2-klein_comparison.jpg`, `mandril_flux2-klein.png` —
-  FLUX.2-klein-4B on `mandril.brainimg` at 512×512 bf16 (4-step img2img,
-  depth map as the starting image; canny + seg ignored per §3.3.8). The
-  pseudo-ControlNet reaches #2 PSNR overall but shifts the colour palette.
-- `peppers_flux-depth-turbo_comparison.jpg`,
-  `cameraman_flux-depth-turbo_comparison.jpg` — cross-subject sanity rows
-  (FLUX depth turbo on the peppers and cameraman blueprints, 512×512 FP8).
-  Cameraman exercises the grayscale caption path (§3.2).
-- `mandril_grid.jpg` — combined side-by-side grid of all backends
-  (SD 1.5, SDXL, their turbos, Z-Image, Qwen-Image, HunyuanDiT,
-  SANA, FLUX.2-klein, FLUX.1-Depth-dev and its turbo).
-- `peppers_grid.jpg`, `cameraman_grid.jpg`, `airplane_grid.jpg` — the same
-  all-backend grid run on the peppers, cameraman, and airplane blueprints,
-  confirming the codec generalises across the broad natural palette (peppers),
-  the grayscale edge case (cameraman exercises the `monochrome, grayscale`
-  caption path, §3.2), and a sharp-edge man-made subject (the F-16's clean
-  lines suit the canny ControlNet — SD 1.5 turbo reaches 15.05 dB, the
-  highest PSNR of any SIPI subject at 512²).
+
+Across the SIPI subjects the per-backend character is best read from the
+fidelity numbers in §4.7: SDXL at its native 1024² reproduces the mandril's
+broad palette most faithfully; SD 1.5 turbo gives the best speed/fidelity
+trade-off on the same image; FLUX.1-Depth-dev at 512² stays close to the
+source palette where SDXL@512 drifts (§4.6); HunyuanDiT and FLUX.2-klein
+score in the top half by PSNR yet are visually weak due to palette
+collapse/shift (§4.6, §4.7). Cross-subject, the grayscale cameraman is the
+easiest to match (FLUX depth turbo reaches 15.80 dB) and the F-16's clean
+lines suit the canny ControlNet (SD 1.5 turbo reaches 15.05 dB on
+`airplane.brainimg`, the highest PSNR of any SIPI subject at 512²).
+
+Side-by-side grids of all backends on each SIPI subject can be regenerated
+with `scripts/make_backend_grid.py <subject>` (mandril, peppers,
+cameraman, airplane); the script writes `<subject>_grid.jpg` next to the
+source. The per-backend reconstruction PNGs and `<subject>_<backend>_comparison.jpg`
+side-by-sides are similarly produced by `decoder.py` and
+`scripts/make_comparison.py`. These artifacts are deliberately gitignored
+(see `.gitignore`: they are large decoder outputs, not source) and
+regenerated on demand.
 
 ## 4.4 Determinism
 
@@ -718,7 +703,7 @@ Five failure modes remain documented in `TODO.md`:
   the fastest 1024-native backend (54 s at 1024², ~5 GB RAM) but the
   lowest-PSNR backend due to the mismatch.
 - **FLUX.2-klein img2img palette shift.** The pseudo-ControlNet img2img
-  path (§3.3.8) reaches #2 PSNR overall (11.01 dB at 512²) but shifts the
+  path (§3.3.10) reaches #2 PSNR overall (11.01 dB at 512²) but shifts the
   colour palette: 41.9% blue/purple vs the mandril source's 30.7%, and on
   the peppers (12% blue source) the FLUX depth turbo path collapses to
   0.3% blue — the model converts the depth map's grayscale into warm tones
@@ -819,11 +804,9 @@ Six observations:
 
 **These numbers do not generalise beyond the SIPI samples** (four sources
 with varied palettes); §5.3 notes that a real evaluation requires more
-subjects and perceptual metrics (LPIPS, CLIP-score, FID). The combined
-side-by-side grid of all backends on the mandril is in `mandril_grid.jpg`;
-`peppers_grid.jpg`, `cameraman_grid.jpg`, and `airplane_grid.jpg` show the
-same all-backend grid on the other three SIPI subjects (broad natural
-palette, grayscale, and a sharp-edge man-made subject).
+subjects and perceptual metrics (LPIPS, CLIP-score, FID). Side-by-side
+grids of all backends on each SIPI subject can be regenerated with
+`scripts/make_backend_grid.py` (mandril, peppers, cameraman, airplane).
 
 ## 4.8 ControlNet scale sweep
 
@@ -957,10 +940,10 @@ these via `encoder.py`/`decoder.py` and the `samples/` directory.
 brainimg is a small, reproducible prototype of a different way to compress
 images: store the *meaning and structure* of a scene and let a diffusion model
 repaint it. We have described the format schema, the four-stage encoder, the
-sixteen decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
-Z-Image-Turbo, Qwen-Image, HunyuanDiT v1.2 distilled and full, SANA,
-FLUX.2-klein-4B img2img, FLUX.1-Depth-dev / -Canny-dev with their
-Hyper-SD turbo variants, FLUX.1-dev + Shakker-Labs Union ControlNet,
+fourteen decoder backends (SD 1.5, SDXL, their Hyper-SD turbo variants,
+Z-Image-Turbo, Qwen-Image, HunyuanDiT v1.2, SANA,
+FLUX.2-klein-4B img2img, FLUX.1-Depth-dev / -Canny-dev with
+Hyper-SD turbo on the depth variant, FLUX.1-dev + Shakker-Labs Union ControlNet,
 and Stable Diffusion 3.5 Large) with their quality post-processing and gamma
 brightness fallback, and the device/precision tradeoffs across CPU fp32,
 MPS int8, and CUDA fp16. Using measurements reproducible from the
@@ -1033,7 +1016,7 @@ image (`samples/lenna.tiff`, 512×512, seed 916570520). Lenna was removed
 from the sample set prior to publication per the well-known objection
 documented at <https://en.wikipedia.org/wiki/Lenna>; the numbers below are
 retained for provenance and to document how the headline findings changed
-(or did not) when the sample set moved to the three USC-SIPI images.
+(or did not) when the sample set moved to the four USC-SIPI images.
 
 ## A.1 Per-backend fidelity and speed (Lenna, 512×512)
 

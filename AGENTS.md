@@ -3,6 +3,14 @@
 High-signal notes for OpenCode agents working in this repo. See `README.md`
 for the full project description and `TODO.md` for planned decode-quality work.
 
+## Paper
+
+- The canonical source for the paper is **`PAPER.typ`** (Typst). `PAPER.md`
+  is a Markdown mirror for GitHub rendering — keep it in sync when you edit
+  the `.typ`. `PAPER.pdf` is the rendered artifact; rebuild it with
+  `typst compile PAPER.typ` (Typst 0.15+). If `PAPER.md` and `PAPER.typ`
+  drift, `PAPER.typ` wins.
+
 ## Setup
 
 - Python **3.12** (pyproject pins `>=3.12,<3.13`) via [`uv`](https://github.com/astral-sh/uv):

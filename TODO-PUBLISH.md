@@ -300,9 +300,10 @@ peppers and grayscale cameraman. The file was renamed to
       is in PAPER.md §A / a §A cross-ref / TODO.md:74.)* — **passed**: 16 matches,
       all intentional (the prior unintentional `sweep_scales.py:80` comment was
       reworded); no working-tree Lenna files remain.
-- [ ] Regenerate `PAPER.pdf` from `PAPER.md` if a build script exists; else
-      leave `.md` for manual re-render. *(no PDF build script found in the repo
-      — leave `.md` for manual re-render.)*
+- [x] Regenerate `PAPER.pdf` from `PAPER.md` if a build script exists; else
+      leave `.md` for manual re-render. *(done — `PAPER.typ` is now the
+      canonical source; `PAPER.pdf` rebuilt via `typst compile PAPER.typ`;
+      `PAPER.md` kept as a Markdown mirror for GitHub rendering.)*
 
 ---
 

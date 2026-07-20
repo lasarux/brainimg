@@ -393,3 +393,11 @@ scripts/           # sample-image generator
 tests/             # format round-trip + schema tests
 samples/           # bundled test images
 ```
+
+## License
+
+The code in this repository is licensed under the **MIT License** — see
+[`LICENSE`](LICENSE). The diffusion **model weights** used by the decoder are
+downloaded at runtime from Hugging Face under their own (sometimes gated,
+sometimes non-commercial) licenses and are **not** covered by this license;
+see [`NOTICE.md`](NOTICE.md) for the per-backend breakdown.

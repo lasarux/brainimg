@@ -6,7 +6,7 @@ blueprint** (a 128x128 depth map + 128x128 Canny edge map) and a seed. On decode
 Stable Diffusion + two ControlNets regenerate a visually faithful image at any
 resolution.
 
-> This is a research toy, not a replacement for JPEG. See `PLAN.md` for the
+> This is a research toy, not a replacement for JPEG. See `PAPER.md` for the
 > motivation and the "Semantic-Relational Field" paradigm.
 
 ## Architecture (hybrid)

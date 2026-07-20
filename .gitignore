@@ -25,6 +25,7 @@ venv/
 *.brainimg
 out/
 recon.jpg
+recon.png
 recon_*.jpg
 recon_*.png
 # Sweep / run logs
@@ -32,6 +33,7 @@ phase2_sweep.log
 *.sweep.log
 # Generated side-by-side comparisons and per-backend reconstruction outputs.
 # These are produced by decoder.py / scripts and are not tracked.
+comparison.jpg
 *_comparison.jpg
 *_grid.jpg
 *_recon.png
@@ -42,6 +44,13 @@ peppers_*.png
 cameraman_*.png
 airplane_*.png
 test512_recon.png
+
+# uv lockfile (degenerate — real deps live in requirements.txt)
+uv.lock
+
+# Internal planning / publish-prep docs, not part of the public repo
+PLAN.md
+TODO-PUBLISH.md
 
 # OS
 .DS_Store

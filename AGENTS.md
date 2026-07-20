@@ -38,10 +38,10 @@ for the full project description and `TODO.md` for planned decode-quality work.
     (188 GB RAM fits SDXL/Z-Image/FLUX). Add `--model sd15-turbo` / `sdxl-turbo`
     for Hyper-SD 8-step distilled LoRA — measured on `samples/mandril_color.tif`
     (512², same seed, after the ControlNet scale tuning): SD 1.5 turbo
-    50.1 s / 9.65 dB PSNR vs ~3 min / 8.70 dB for the 30-step path with the
-    old defaults (+0.95 dB — distilled schedule + tuned scales both help),
-    SDXL turbo 84.2 s at 512² vs ~17 min for the 30-step path at 512²
-    (~12x faster at −0.23 dB). `peft` is required for LoRA loading.
+    50.7 s / 9.28 dB PSNR vs 156 s / 8.74 dB for the 30-step path
+    (+0.54 dB — distilled schedule + tuned scales both help),
+    SDXL turbo 75.5 s at 512² vs ~16 min for the 30-step path at 512²
+    (~13x faster at −2.58 dB). `peft` is required for LoRA loading.
   - Best fidelity: `--device cpu` (fp32). Low-RAM: add `--quantize`.
   - Apple Silicon: `--device mps` uses int8 (fp16 NaNs on MPS). 512x512 OOMs on 8 GB; use 256.
 - Helpers: `python scripts/make_sample.py` (synthetic test image), `scripts/make_comparison.py`
@@ -159,12 +159,14 @@ for the full project description and `TODO.md` for planned decode-quality work.
   available for SANA. The blueprint's canny map is fed to the HED ControlNet
   (both are edge maps, but HED produces soft probability edges while canny
   produces hard binary edges). This type mismatch creates a PSNR-vs-color
-  trade-off: scale=0.5 gives the best PSNR (10.20 dB) but collapses the
+  trade-off (the sweep numbers below are from the retired Lenna sample):
+  scale=0.5 gives the best PSNR (10.20 dB) but collapses the
   blue/purple band (20% vs source 53%); scale=1.0 preserves color (54% blue)
   but gives the worst PSNR (8.69 dB). The default 0.4 is the visually best
-  compromise (9.91 dB, 16% blue). SANA is the fastest 1024-native backend
-  (52 s at 1024², 20 steps, ~5 GB RAM) but the lowest-PSNR backend due to
-  the mismatch.
+  compromise — verified on the mandril at 1024²: 7.69 dB PSNR while
+  preserving the blue band at 28.5% (vs source 30.7%). SANA is the fastest
+  1024-native backend (54 s at 1024², 20 steps, ~5 GB RAM) but the
+  lowest-PSNR backend due to the mismatch.
   Depth and seg maps are ignored (no depth/seg ControlNet exists for SANA).
 - **FLUX Control CPU bf16 black frame + gating**: `--model flux-canny`
   (and the `flux-canny-turbo` variant) can emit a black/NaN frame under
@@ -205,10 +207,10 @@ for the full project description and `TODO.md` for planned decode-quality work.
   pseudo-ControlNet approach. The model "edits" the depth map into a
   photorealistic image matching the caption, rather than being structurally
   constrained by a ControlNet. The img2img approach gives the #2 PSNR
-  overall (13.76 dB at 512², after FLUX depth turbo's 14.49 dB) but
-  collapses the color palette (15% blue vs source 53%) -- the model
+  overall (11.01 dB at 512² on the mandril, after SDXL's 13.01 dB) but
+  shifts the color palette (41.9% blue/purple vs source 30.7%) -- the model
   converts the depth map's grayscale into warm tones regardless of the
-  caption. 240 s at 512², 4 steps, ~13 GB RAM. Canny and seg maps are
+  caption. 42 s at 512², 4 steps, ~13 GB RAM. Canny and seg maps are
   ignored (only one image input).
 
 ## Conventions

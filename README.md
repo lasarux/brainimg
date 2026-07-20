@@ -88,8 +88,8 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
   box, where each step costs the same wall time. Measured on the AMD CPU
   target with `samples/mandril_color.tif` (512x512, same seed + blueprint, after the
   ControlNet scale tuning below): SD 1.5 turbo **50.7 s / 9.28 dB PSNR**
-  vs ~3 min / 8.74 dB for the 30-step path with the old defaults
-  (~3.5x faster and **+0.54 dB** — the distilled schedule + tuned scales both
+  vs 156 s / 8.74 dB for the 30-step path
+  (~3.1x faster and **+0.54 dB** — the distilled schedule + tuned scales both
   help); SDXL turbo **75.5 s** vs ~16 min for the 30-step path at 512²
   (~13x faster, at a small −2.58 dB cost since SDXL at native 1024² wins
   on this subject).

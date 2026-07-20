@@ -145,14 +145,14 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       this is an experimental pseudo-ControlNet approach. The model "edits"
       the depth map into a photorealistic image matching the caption, rather
       than being structurally constrained by a ControlNet.
-      The img2img approach gives the #2 PSNR overall (13.76 dB at 512²,
-      after FLUX depth turbo's 14.49 dB) but collapses the color palette
-      (15% blue vs source 53%) -- the model converts the depth map's
-      grayscale into warm tones regardless of the caption. 240 s at 512²,
-      4 steps, ~13 GB RAM. Canny and seg maps are ignored (only one image
-      input). The only real FLUX.2 ControlNet (alibaba-pai Union, depth+canny)
-      requires the VideoX-Fun library + 32B gated FLUX.2-dev, which is
-      impractical on CPU.
+       The img2img approach gives the #2 PSNR overall (11.01 dB at 512² on
+       the mandril, after SDXL's 13.01 dB) but shifts the color palette
+       (41.9% blue/purple vs source 30.7%) -- the model converts the depth
+       map's grayscale into warm tones regardless of the caption. 42 s at
+       512², 4 steps, ~13 GB RAM. Canny and seg maps are ignored (only one
+       image input). The only real FLUX.2 ControlNet (alibaba-pai Union,
+       depth+canny) requires the VideoX-Fun library + 32B gated FLUX.2-dev,
+       which is impractical on CPU.
 - [x] **Z-Image-Turbo backend.** `--model zimage` adds Tongyi-MAI/Z-Image-Turbo
       (6B bf16 DiT) + alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1
       (full 2.1-8steps, depth-only). Differs from the SD path:

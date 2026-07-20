@@ -26,7 +26,7 @@ backends, the per-device memory/precision strategies, and the
 brightness/saturation post-processing with a gamma fallback for extreme
 targets. Using measurements reproducible from the committed repository on an
 AMD x86_64 CPU-only target with 188 GB RAM, we report blueprint sizes of
-2.7–8.4 KB (compression ratios of 2.2×–102.8×), deterministic reconstruction
+2.7–8.4 KB (compression ratios of 2.2×–124.8×), deterministic reconstruction
 given a fixed seed, and a per-backend fidelity and speed comparison on four
 classic USC-SIPI test images (mandril, peppers, cameraman, airplane) in which
 Hyper-SD 8-step distilled schedules *beat* their 30-step counterparts on
@@ -82,6 +82,22 @@ replacement for JPEG.
 #import "@preview/mitex:0.2.6": *
 
 #doc-make-title()
+
+#if doc-abstract != none [
+  #v(0.5em)
+  #block(
+    width: 88%,
+    inset: (left: 2.5em, right: 2.5em),
+  )[
+    #set par(justify: true)
+    #text(size: 0.95em)[
+      #align(center)[*Abstract*]
+      #v(0.3em)
+      #eval(doc-abstract, mode: "markup")
+    ]
+  ]
+  #v(0.5em)
+]
 
 = 1. Introduction
 
@@ -194,7 +210,7 @@ design, though the individual components are off-the-shelf.
 Accurate captions are the semantic backbone of the format. We use the \
 Qwen2-VL-2B-Instruct 4-bit model via MLX on Apple Silicon for fast, low-memory \
 captioning, and fall back to the Qwen2.5-VL-7B-Instruct model via \
-transformers elsewhere. A known failure mode \(§4.5) is that the captioner can \
+transformers elsewhere. A known failure mode \(§4.6) is that the captioner can \
 misidentify scene elements; because the conditioning maps drive structural \
 fidelity, a wrong caption biases mood more than geometry.
 
@@ -500,7 +516,7 @@ T5-XXL \(weights only), dropping resident CPU RAM from ~24 GB to ~12 GB. \
 === 3.3.8 Stable Diffusion 3.5 Large \(depth + canny ControlNets)
 
 `--model sd35` loads Stability AI's *Stable Diffusion 3.5 Large* \
-\[Stability AI, 2024\] \(8B MMDiT) with the official *depth* and *canny* \
+\[Esser et al., 2024\] \(8B MMDiT) with the official *depth* and *canny* \
 ControlNets. Both ControlNets are 8B checkpoints; we load them separately \
 and wrap them in `SD3MultiControlNetModel` so depth and canny are fed \
 together. Text encoding uses CLIP-L, CLIP-G, and T5-XXL \(the SD3 text \
@@ -646,7 +662,7 @@ constant* \(a few KB) regardless of source resolution or colour depth: a \
 256² puppy, a 512² grayscale cameraman, and a 512² colour mandril all \
 produce 6–8 KB files, because the stored maps are fixed at 128². Second, \
 the compression ratio therefore _grows with source size_: the large \
-uncompressed TIFFs compress ~94–103× while the already-compressed puppy \
+uncompressed TIFFs compress ~94–125× while the already-compressed puppy \
 JPEG compresses ~2×. This is the opposite of transform codecs, whose ratios \
 are largely independent of whether the source is raw or pre-compressed, and \
 is a direct consequence of storing meaning rather than pixels.
@@ -791,7 +807,7 @@ palettes and grayscale.
 | `peppers_color.tif` \(512²) | 8 | 187 | 4142 | 11.96 | 51.5 | \
 | `cameraman.tif` \(512² grayscale) | 8 | 207 | 1712 | *15.80* | 28.4 |
 
-Six observations:
+Seven observations:
 
 + *Hyper-SD 8-step distilled schedules beat their 30-step counterparts on \
 SD 1.5.* The turbo path scores 9.28 dB vs 8.74 dB for the 30-step path \
@@ -920,8 +936,8 @@ is a multi-gigabyte neural network \(anywhere from ~4 GB for SD 1.5 to \
 device without the standard decoder cannot view the image—the codec is \
 more like a video codec in this respect. On the other hand, the decoder \
 is _shared_ across all files, so the per-file cost remains a few KB.
-- *Compute cost.* Decompression runs a diffusion model: 50 s for SD 1.5 \
-turbo at 512² on the AMD CPU target, 166 s for FLUX turbo \(FP8), ~24 min \
+- *Compute cost.* Decompression runs a diffusion model: 51 s for SD 1.5 \
+turbo at 512² on the AMD CPU target, 475 s for FLUX turbo \(FP8), ~17 min \
 for Qwen-Image at 50 steps. The turbo paths make interactive use \
 plausible on CPU; the 30-step paths remain in the minutes-per-image \
 range. This still precludes gallery scrolling or video use cases.
@@ -985,7 +1001,7 @@ and Stable Diffusion 3.5 Large) with their quality post-processing and gamma \
 brightness fallback, and the device/precision tradeoffs across CPU fp32, \
 MPS int8, and CUDA fp16. Using measurements reproducible from the \
 committed repository on an AMD CPU target with 188 GB RAM, we observe \
-few-kilobyte blueprints \(2.2×–102.8× compression), deterministic \
+few-kilobyte blueprints \(2.2×–124.8× compression), deterministic \
 reconstruction given a seed, and two empirical findings: \(1) Hyper-SD's \
 8-step distilled schedules _beat_ their 30-step counterparts on SD 1.5 \
 \(+0.54 dB) while running 3.1× faster on CPU, and \(2) lower ControlNet \
@@ -1105,6 +1121,10 @@ Markdown draft; a submission version would expand them into a `.bib`.
 - Rombach, R., Blattmann, A., Lorenz, D., Esser, P., Ommer, B. \(2022). \
 _High-Resolution Image Synthesis with Latent Diffusion Models_ \(Stable \
 Diffusion, arXiv 2112.10752). CVPR 2022.
+- Radford, A., Kim, J. W., Hallacy, C., et al. \(2021). _Learning Transferable \
+Visual Models from Natural Language Supervision_ \(CLIP, arXiv 2103.00020). \
+ICML 2021. CLIP text embeddings condition SD 1.5 / SDXL; CLIP-score is a \
+planned semantic-fidelity metric \(§5.3).
 - Zhang, L., Rao, A., Agrawala, M. \(2023). _Adding Conditional Control to \
 Text-to-Image Diffusion Models_ \(ControlNet, arXiv 2302.05543). ICCV 2023.
 - Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J., Zhao, H. \(2024). \
@@ -1121,6 +1141,15 @@ fallback).
 - HuggingFace `diffusers` library; `transformers` library.
 - HuggingFace `optimum-quanto` \(int8 quantization for MPS/CPU).
 - `stabilityai/sd-vae-ft-mse` \(fine-tuned SD 1.5 VAE).
+- Podell, D., English, Z., Lacey, K., Blattmann, A., Dockhorn, T., Müller, J., \
+Penna, J., Rombach, R. \(2023). _SDXL: Improving Latent Diffusion Models for \
+High-Resolution Image Synthesis_ \(arXiv 2307.01952). Model: \
+`stabilityai/stable-diffusion-xl-base-1.0`.
+- Esser, P., Kulal, S., et al. \(2024). _Scaling Rectified Flow Transformers \
+for High-Resolution Image Synthesis_ \(Stable Diffusion 3, arXiv 2403.03206). \
+ICML 2024. Model: `stabilityai/stable-diffusion-3.5-large` with \
+`stabilityai/stable-diffusion-3.5-large-controlnet-{depth,canny}` \(referenced \
+in text as Stable Diffusion 3.5 Large \[Esser et al., 2024\]).
 - `stabilityai/stable-diffusion-xl-base-1.0`; `diffusers/controlnet-{depth,canny}-sdxl-1.0`; \
 `abovzv/sdxl_segmentation_controlnet_ade20k` \(SDXL stack).
 - `lllyasviel/control_v11f1p_sd15_depth`, \
@@ -1130,23 +1159,34 @@ fallback).
 inference) with `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1` \
 \(the full `2.1-8steps` variant; the `*lite*` 2601/2602 files are rejected \
 by diffusers 0.38 due to a widened `control_all_x_embedder` input dim).
+- Black Forest Labs. _FLUX.1-dev_ \(12 B MMDiT + T5-XXL, rectified flow; \
+model card / technical report). `black-forest-labs/FLUX.1-dev` — gated on \
+Hugging Face; FLUX.1-dev non-commercial license. Underlies the FLUX Control \
+variants and the `flux-union` backend.
 - `black-forest-labs/FLUX.1-Depth-dev` and `black-forest-labs/FLUX.1-Canny-dev` \
 \(FLUX.1 guidance-distilled Control variants; channel-concat \
-conditioning). `black-forest-labs/FLUX.1-dev` \(the underlying 12 B \
-MMDiT + T5-XXL base) — gated on Hugging Face; both FLUX Control \
-variants carry the FLUX.1-dev non-commercial license.
+conditioning). Both carry the FLUX.1-dev non-commercial license.
+- Shakker Labs & InstantX \(2024). _FLUX.1-dev-ControlNet-Union-Pro_ \(Union \
+ControlNet bundling seven conditioning modes — canny, tile, depth, blur, \
+pose, gray, low-quality — into one network for FLUX.1-dev; model card). \
+`Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro` \(used by the `flux-union` \
+backend; referenced in text as \[Shakker Labs & InstantX, 2024\]).
 - Ren, Y., Xia, X., Lu, Y., et al. \(2024). _Hyper-SD: Trajectory Segmented \
 Consistency Model for Efficient Image Synthesis_ \(arXiv 2404.13686). \
 ByteDance/Hyper-SD LoRAs for SD 1.5, SDXL, and FLUX.1-dev \(8-step \
-distillation).
+distillation). The SD 1.5 / SDXL turbo paths swap the scheduler to \
+DDIM with a trailing schedule.
+- Song, J., Meng, C., Ermon, S. \(2021). _Denoising Diffusion Implicit \
+Models_ \(DDIM, arXiv 2010.02502). ICLR 2021. Used by the Hyper-SD turbo \
+schedulers \(`DDIMScheduler(timestep_spacing="trailing")`\).
 - Wu, C., Li, J., Zhou, J., et al. \(2025). _Qwen-Image Technical Report_ \
 \(arXiv 2508.02324). `Qwen/Qwen-Image` \(Apache 2.0 DiT) with \
 `InstantX/Qwen-Image-ControlNet-Union` \(Union ControlNet, Apache 2.0).
 - Li, Z., Zhang, J., Lin, Q., et al. \(2024). _Hunyuan-DiT: A Powerful \
-Multi-Resolution Diffusion Transformer with Fine-Grained Chinese \
-Understanding_ \(arXiv 2405.08748). `Tencent-Hunyuan/HunyuanDiT-v1.2- Diffusers-Distilled` and `HunyuanDiT-v1.2-Diffusers` \(non-distilled) with \
-separate `HunyuanDiT-v1.2-ControlNet-Diffusers-{Depth,Canny}` \
-\(tencent-hunyuan-community license).
+  Multi-Resolution Diffusion Transformer with Fine-Grained Chinese \
+  Understanding_ \(arXiv 2405.08748). `Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled` and `HunyuanDiT-v1.2-Diffusers` \(non-distilled) with \
+  separate `HunyuanDiT-v1.2-ControlNet-Diffusers-{Depth,Canny}` \
+  \(tencent-hunyuan-community license).
 - Xie, E., Chen, J., Chen, J., et al. \(2024). _SANA: Efficient \
 High-Resolution Image Synthesis with Linear Diffusion Transformers_ \
 \(arXiv 2410.10629, MIT). `Efficient-Large-Model/Sana_600M_1024px_diffusers`

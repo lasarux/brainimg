@@ -678,6 +678,40 @@ Per `README.md`, the captioner correctly described the scene \("a black puppy \
 sitting on a wooden surface") and the decoder produced a visually faithful \
 reconstruction at 256×256 in 59 s on the M1/8 GB machine.
 
+#figure(
+  image("docs/grids/mandril_grid.jpg", width: 100%),
+  caption: [
+    Mandril \(512²): original \(top-left) alongside all 13 decoder backends, \
+    labeled with model name and PSNR \(dB) against the source. \
+    Generated on the AMD CPU target \(188 GB RAM, no CUDA), same blueprint + seed 200.
+  ],
+)
+
+#figure(
+  image("docs/grids/peppers_grid.jpg", width: 100%),
+  caption: [
+    Peppers \(512²): original and all 13 decoder backends, same conditions as \
+    Figure 1.
+  ],
+)
+
+#figure(
+  image("docs/grids/cameraman_grid.jpg", width: 100%),
+  caption: [
+    Cameraman \(512²): original and all 13 decoder backends. The grayscale \
+    subject is the easiest to match — FLUX depth turbo reaches 15.80 dB.
+  ],
+)
+
+#figure(
+  image("docs/grids/airplane_grid.jpg", width: 100%),
+  caption: [
+    Airplane \(512²): original and all 13 decoder backends. The F-16's clean \
+    lines suit the canny ControlNet — SD 1.5 turbo reaches 15.05 dB, the \
+    highest PSNR of any SIPI subject at 512².
+  ],
+)
+
 Across the SIPI subjects the per-backend character is best read from the \
 fidelity numbers in §4.7: SDXL at its native 1024² reproduces the mandril's \
 broad palette most faithfully; SD 1.5 turbo gives the best speed/fidelity \
@@ -689,14 +723,10 @@ easiest to match \(FLUX depth turbo reaches 15.80 dB) and the F-16's clean \
 lines suit the canny ControlNet \(SD 1.5 turbo reaches 15.05 dB on \
 `airplane.brainimg`, the highest PSNR of any SIPI subject at 512²).
 
-Side-by-side grids of all backends on each SIPI subject can be regenerated \
-with `scripts/make_backend_grid.py <subject>` \(mandril, peppers, \
-cameraman, airplane); the script writes `<subject>_grid.jpg` next to the \
-source. The per-backend reconstruction PNGs and `<subject>_<backend>\
-_comparison.jpg` side-by-sides are similarly produced by `decoder.py` and \
-`scripts/make_comparison.py`. These artifacts are deliberately gitignored \
-\(see `.gitignore`: they are large decoder outputs, not source) and \
-regenerated on demand.
+The per-backend reconstruction PNGs and `<subject>_<backend>_comparison.jpg` \
+side-by-sides are produced by `decoder.py` and `scripts/make_comparison.py` \
+respectively. These artifacts are deliberately gitignored \(see `.gitignore`: \
+they are large decoder outputs, not source) and regenerated on demand.
 
 == 4.4 Determinism
 

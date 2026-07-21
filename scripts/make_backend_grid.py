@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -68,7 +68,7 @@ def main() -> int:
 
     recons = [("ORIGINAL", "", src_path)]
     for label, suffix in DEFAULT_BACKENDS:
-        recons.append((label, "", f"{args.sample}_{suffix}.png"))
+        recons.append((label, "", str(Path("outputs") / f"{args.sample}_{suffix}.png")))
 
     cell_w = args.size
     cell_h = args.size + 48

@@ -21,7 +21,9 @@ venv/
 *.bin
 *.ckpt
 
-# brainimg runtime artifacts
+# brainimg runtime artifacts — all generated outputs live under outputs/
+outputs/
+# Stray root-level artifacts (in case something writes to CWD instead of outputs/)
 *.brainimg
 out/
 recon.jpg
@@ -50,6 +52,7 @@ test512_recon.png
 uv.lock
 
 # Internal planning / publish-prep docs, not part of the public repo
+docs/planning/
 PLAN.md
 TODO-PUBLISH.md
 

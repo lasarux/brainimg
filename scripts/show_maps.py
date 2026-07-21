@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from brainimg.extract import b64_to_image
 from brainimg.format import load_brainimg

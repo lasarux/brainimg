@@ -24,6 +24,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 from brainimg.format import load_brainimg
 
 # ADE20K palette anchors (rough hand-picked centers from the swin-tiny palette).

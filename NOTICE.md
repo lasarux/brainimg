@@ -2,8 +2,9 @@
 
 ## Code
 
-The brainimg source code in this repository (the `brainimg/` package,
-`encoder.py`, `decoder.py`, `scripts/`, `tests/`, and the documentation) is
+The brainimg source code in this repository (the `src/brainimg/` package,
+`src/encoder.py`, `src/decoder.py`, `scripts/`, `tests/`, and the documentation
+under `docs/`) is
 licensed under the **MIT License** — see [`LICENSE`](LICENSE).
 
 Copyright (c) 2026 Pedro A. Gracia Fajardo <lasarux@gmail.com>.

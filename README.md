@@ -6,7 +6,7 @@ blueprint** (a 128x128 depth map + 128x128 Canny edge map) and a seed. On decode
 Stable Diffusion + two ControlNets regenerate a visually faithful image at any
 resolution.
 
-> This is a research toy, not a replacement for JPEG. See `PAPER.md` for the
+> This is a research toy, not a replacement for JPEG. See `docs/paper/PAPER.md` for the
 > motivation and the "Semantic-Relational Field" paradigm.
 
 ## Architecture (hybrid)
@@ -63,16 +63,16 @@ supported** — use `--model sd15` there.
 
 ```bash
 # CUDA: fast + full bf16 (needs ~22 GB VRAM)
-python decoder.py out.brainimg -o recon.png --model flux-depth --device cuda
+python src/decoder.py out.brainimg -o outputs/recon.png --model flux-depth --device cuda
 
 # CUDA + FP8: fits in ~12 GB VRAM, small quality cost
-python decoder.py out.brainimg -o recon.png --model flux-depth --device cuda --quantize
+python src/decoder.py out.brainimg -o outputs/recon.png --model flux-depth --device cuda --quantize
 
 # CPU-only with FP8: ~12 GB RAM resident, slow but works (recommended for CPU)
-python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu --quantize
+python src/decoder.py out.brainimg -o outputs/recon.png --model flux-depth --device cpu --quantize
 
 # CPU without --quantize: ~22 GB RAM resident (won't fit most dev boxes)
-python decoder.py out.brainimg -o recon.png --model flux-depth --device cpu
+python src/decoder.py out.brainimg -o outputs/recon.png --model flux-depth --device cpu
 ```
 
 ### `--model sd15-turbo` / `--model sdxl-turbo`: Hyper-SD distilled backends
@@ -105,10 +105,10 @@ LoRA is loaded + `fuse_lora(0.125)` + the scheduler is swapped to
 
 ```bash
 # CPU-only with lots of RAM (the brainimg target): 8-step SDXL @ 1024
-python decoder.py out.brainimg -o recon.png --model sdxl-turbo --device cpu
+python src/decoder.py out.brainimg -o outputs/recon.png --model sdxl-turbo --device cpu
 
 # CPU-only SD 1.5 turbo @ 512
-python decoder.py out.brainimg -o recon.png --model sd15-turbo --device cpu
+python src/decoder.py out.brainimg -o outputs/recon.png --model sd15-turbo --device cpu
 ```
 
 ### `--model zimage`: Z-Image-Turbo backend
@@ -141,10 +141,10 @@ from the SD 1.5/SDXL path:
 
 ```bash
 # CUDA: fast and high fidelity (needs ~16 GB VRAM)
-python decoder.py out.brainimg -o recon.png --model zimage --device cuda
+python src/decoder.py out.brainimg -o outputs/recon.png --model zimage --device cuda
 
 # CPU-only: works but slow, needs ~14 GB RAM resident (no offload on CPU)
-python decoder.py out.brainimg -o recon.png --model zimage --device cpu
+python src/decoder.py out.brainimg -o outputs/recon.png --model zimage --device cpu
 ```
 
 Encoder and decoder are separate processes, so models are never resident at the
@@ -201,33 +201,37 @@ The first run downloads the models to `~/.cache/huggingface` (captioner ~15 GB
 for the 7B on CPU; depth + seg ~1 GB; decoder ~3.5 GB SD 1.5 / ~7 GB SDXL /
 ~18 GB Z-Image / ~22 GB FLUX).
 
+> A `Makefile` wraps the canonical commands — run `make help` for the full list.
+> The most common: `make check` (lint + test), `make encode IMG=... SAMPLE=...`,
+> `make decode FILE=... OUT=... MODEL=...`, `make paper`, `make grids`.
+
 ## Usage
 
 ```bash
 # Encode: photo -> tiny .brainimg blueprint
-python encoder.py samples/real.jpg -o out.brainimg
+python src/encoder.py samples/real.jpg -o outputs/out.brainimg
 
 # Decode: blueprint -> regenerated image
-python decoder.py out.brainimg -o recon.png
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png
 
 # CPU mode: full fp32, best fidelity (the AMD CPU target; needs ~10 GB RAM, slow)
-python decoder.py out.brainimg -o recon.png --device cpu
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu
 
 # CPU + Hyper-SD 8-step turbo: ~4x faster, small quality cost
-python decoder.py out.brainimg -o recon.png --device cpu --model sd15-turbo
-python decoder.py out.brainimg -o recon.png --device cpu --model sdxl-turbo --size 1024x1024
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu --model sd15-turbo
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu --model sdxl-turbo --size 1024x1024
 
 # CPU + int8 weights: fits in ~5 GB RAM, small quality cost
-python decoder.py out.brainimg -o recon.png --device cpu --quantize
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu --quantize
 
 # CUDA: fp16, fast and high fidelity (NVIDIA GPUs)
-python decoder.py out.brainimg -o recon.png --device cuda
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cuda
 
 # Larger output on a high-RAM machine
-python decoder.py out.brainimg -o recon.png --device cpu --size 512x512
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu --size 512x512
 
 # Tune ControlNet scales / guidance (defaults: depth 0.8, canny 1.0, seg 1.0, cfg 7.5)
-python decoder.py out.brainimg -o recon.png --device cpu \
+python src/decoder.py outputs/out.brainimg -o outputs/recon.png --device cpu \
     --depth-scale 1.8 --canny-scale 1.0 --seg-scale 1.1 --cfg 8.5
 ```
 
@@ -311,7 +315,7 @@ pytest                       # format tests, no models needed
   this — it is a content/palette drift, not a stat drift. SDXL @ 1024 is
   much closer to the source palette. Workaround: prefer `--model sdxl
   --size 1024x1024`, or use `--model sd15` when the source's color palette
-  matters most. See TODO.md "SDXL hue distribution drift" for details.
+  matters most. See `docs/planning/TODO.md` "SDXL hue distribution drift" for details.
 - **FLUX is heavy**: FLUX is T5-XXL + a 12B transformer (~22 GB bf16
   resident). On CPU you almost always need `--quantize` (FP8 weights,
   drops to ~12 GB). CUDA GPUs need ~22 GB VRAM (or ~12 GB with
@@ -407,18 +411,22 @@ rewards getting overall brightness/layout right but does not penalize
 texture/feature artifacts.
 See the **Example grids** section above for combined side-by-side grids of
 all backends on each SIPI subject (mandril, peppers, cameraman, airplane).
-The grids are regenerated by `python scripts/run_all_grids.py` and live
-under `docs/grids/`.
+The grids are regenerated by `make grids` (or `python scripts/run_all_grids.py`)
+and live under `docs/grids/`.
 
 ## Project layout
 
 ```
-brainimg/          # package: format, device, extract, generate
-encoder.py         # CLI entry: image -> .brainimg
-decoder.py         # CLI entry: .brainimg -> image
-scripts/           # sample-image generator
+src/brainimg/      # package: format, device, extract, generate
+src/encoder.py     # CLI entry: image -> .brainimg
+src/decoder.py     # CLI entry: .brainimg -> image
+scripts/           # sample-image generator, grid + comparison helpers
 tests/             # format round-trip + schema tests
 samples/           # bundled test images
+docs/paper/        # PAPER.typ / PAPER.md / PAPER.pdf
+docs/grids/        # committed example grids
+outputs/           # generated artifacts (gitignored)
+Makefile           # canonical command wrappers (run `make help`)
 ```
 
 ## License

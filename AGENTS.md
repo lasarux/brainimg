@@ -1,15 +1,30 @@
 # AGENTS.md
 
 High-signal notes for OpenCode agents working in this repo. See `README.md`
-for the full project description and `TODO.md` for planned decode-quality work.
+for the full project description and `docs/planning/TODO.md` for planned
+decode-quality work.
+
+## Quick start
+
+A `Makefile` at the repo root wraps the canonical commands — run `make help`
+for the full list. The most common targets:
+
+- `make check` — lint + test (pre-push gate)
+- `make paper` — rebuild the PDF from `docs/paper/PAPER.typ`
+- `make grids` — regenerate all SIPI sample grids (long run)
+- `make encode IMG=samples/real.jpg SAMPLE=out SEED=42`
+- `make decode FILE=outputs/out.brainimg OUT=recon.png MODEL=sd15-turbo`
+
+All raw commands below still work; the Makefile is a convenience layer.
 
 ## Paper
 
-- The canonical source for the paper is **`PAPER.typ`** (Typst). `PAPER.md`
-  is a Markdown mirror for GitHub rendering — keep it in sync when you edit
-  the `.typ`. `PAPER.pdf` is the rendered artifact; rebuild it with
-  `typst compile PAPER.typ` (Typst 0.15+). If `PAPER.md` and `PAPER.typ`
-  drift, `PAPER.typ` wins.
+- The canonical source for the paper is **`docs/paper/PAPER.typ`** (Typst).
+  `docs/paper/PAPER.md` is a Markdown mirror for GitHub rendering — keep it in
+  sync when you edit the `.typ`. `docs/paper/PAPER.pdf` is the rendered
+  artifact; rebuild it with `typst compile --root . docs/paper/PAPER.typ`
+  (Typst 0.15+; the `--root .` lets the `.typ` reach `docs/grids/` via
+  `../grids/...`). If `PAPER.md` and `PAPER.typ` drift, `PAPER.typ` wins.
 
 ## Setup
 
@@ -23,6 +38,10 @@ for the full project description and `TODO.md` for planned decode-quality work.
   ship without `libmlx.so`): `pip uninstall -y mlx mlx-vlm mlx-lm`. Captioning then
   falls back to the transformers Qwen2.5-VL-7B model.
 - First encode/decode downloads several GB of models into `~/.cache/huggingface`.
+- **src/ layout**: the package lives at `src/brainimg/` and the CLI entrypoints
+  at `src/encoder.py` / `src/decoder.py`. `pyproject.toml` sets
+  `[tool.pytest.ini_options] pythonpath = ["src"]` so tests find the package
+  without an editable install. Scripts add `src/` to `sys.path` themselves.
 
 ## Commands
 
@@ -32,8 +51,8 @@ for the full project description and `TODO.md` for planned decode-quality work.
     run without ML deps; both import nothing heavier than numpy/Pillow. `tests/test_flux_config.py`
     is also ML-free and asserts the `_model_config` contract for all `--model` choices.
 - **Lint**: `ruff check .`  (line-length 100, rules E/F/W/I).
-- **Encode**: `python encoder.py samples/real.jpg -o out.brainimg [--seed 42]`
-- **Decode**: `python decoder.py out.brainimg -o recon.png [--device cpu|mps|cuda] [--quantize] [--model ...]`
+- **Encode**: `python src/encoder.py samples/real.jpg -o outputs/out.brainimg [--seed 42]`
+- **Decode**: `python src/decoder.py outputs/out.brainimg -o outputs/recon.png [--device cpu|mps|cuda] [--quantize] [--model ...]`
   - **AMD CPU target** (the dev box): `--device cpu` fp32, no quantization needed
     (188 GB RAM fits SDXL/Z-Image/FLUX). Add `--model sd15-turbo` / `sdxl-turbo`
     for Hyper-SD 8-step distilled LoRA — measured on `samples/mandril_color.tif`
@@ -45,14 +64,16 @@ for the full project description and `TODO.md` for planned decode-quality work.
   - Best fidelity: `--device cpu` (fp32). Low-RAM: add `--quantize`.
   - Apple Silicon: `--device mps` uses int8 (fp16 NaNs on MPS). 512x512 OOMs on 8 GB; use 256.
 - Helpers: `python scripts/make_sample.py` (synthetic test image), `scripts/make_comparison.py`
-  (side-by-side original vs recon).
+  (side-by-side original vs recon). Generated artifacts write to `outputs/`
+  (gitignored) so the repo root stays clean.
 
 ## Architecture
 
-- `encoder.py` / `decoder.py` are the CLI entrypoints; the `brainimg/` package holds
-  `format.py` (schema, ML-free), `device.py` (torch/mlx device + memory helpers),
-  `extract.py` (encoder stages), `generate.py` (SD + ControlNet decoder).
-- `brainimg/generate.py` has decoder backends gated by `--model`:
+- `src/encoder.py` / `src/decoder.py` are the CLI entrypoints; the `src/brainimg/`
+  package holds `format.py` (schema, ML-free), `device.py` (torch/mlx device +
+  memory helpers), `extract.py` (encoder stages), `generate.py` (SD +
+  ControlNet decoder).
+- `src/brainimg/generate.py` has decoder backends gated by `--model`:
   `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
   `sd15-turbo` / `sdxl-turbo` (same base + ControlNets + ByteDance Hyper-SD
   8-step distilled LoRA, DDIM trailing schedule), `zimage` (Z-Image-Turbo 6B
@@ -86,13 +107,13 @@ for the full project description and `TODO.md` for planned decode-quality work.
   resident together (historical 8 GB Apple Silicon constraint; on the AMD CPU
   target with 188 GB this is less critical but still a clean separation).
   Memory is released between heavy stages via `free_torch()` / `free_mlx()`.
-- `brainimg/format.py` is **deliberately free of ML imports** so the format tests run
+- `src/brainimg/format.py` is **deliberately free of ML imports** so the format tests run
   without downloading models. torch/mlx/cv2 are imported **lazily inside functions**
   in the other modules — keep that pattern when editing.
 - `.brainimg` is a small JSON doc; `format_version` is `"0.1"`. `segmentation_map_b64`
   is optional so older files still decode (the seg ControlNet is added only when present).
 - `MAP_SIZE` (currently 128) in `format.py` controls conditioning-map resolution;
-  changing it requires re-encoding existing samples. See TODO.md tier 2.
+  changing it requires re-encoding existing samples. See `docs/planning/TODO.md` tier 2.
 - Deterministic given the seed: re-decoding with the same seed reproduces the image exactly.
 
 ## Gotchas

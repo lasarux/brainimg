@@ -81,7 +81,7 @@ def main() -> int:
     src_arr = np.array(src)
 
     recons = [
-        (label, f"{args.sample}_{suffix}.png")
+        (label, str(Path("outputs") / f"{args.sample}_{suffix}.png"))
         for label, suffix in DEFAULT_BACKENDS
     ]
     size_str = f"{args.size}x{args.size}"

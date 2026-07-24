@@ -22,6 +22,7 @@ DEFAULT_BACKENDS = [
     ("SD 1.5 turbo (8-step)", "sd15-turbo"),
     ("SDXL (30-step)", "sdxl"),
     ("SDXL turbo (8-step)", "sdxl-turbo"),
+    ("SSD-1B (30-step)", "ssd1b"),
     ("Z-Image (depth-only)", "zimage"),
     ("Qwen-Image (depth-only)", "qwen-image"),
     ("SANA (HED/canny)", "sana"),

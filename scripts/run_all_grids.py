@@ -14,7 +14,7 @@ without redoing finished work. Per-step wall time is appended to
 Encoder and decoder are invoked as subprocesses (the decoder in
 particular must be a separate process so model memory is fully released
 between backends -- a long-lived Python process would accumulate GPU/RAM
-fragmentation across 13 model loads).
+fragmentation across 14 model loads).
 
 Usage:
     python scripts/run_all_grids.py                 # all 4 samples
@@ -62,6 +62,7 @@ BACKEND_FLAGS: list[tuple[str, list[str]]] = [
     ("sd15-turbo", ["--model", "sd15-turbo"]),
     ("sdxl", ["--model", "sdxl", "--size", "1024x1024"]),
     ("sdxl-turbo", ["--model", "sdxl-turbo"]),
+    ("ssd1b", ["--model", "ssd1b", "--size", "1024x1024"]),
     ("zimage", ["--model", "zimage"]),
     ("qwen-image", ["--model", "qwen-image"]),
     ("sana", ["--model", "sana"]),

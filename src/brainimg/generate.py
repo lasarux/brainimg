@@ -815,6 +815,7 @@ def _build_pipeline(
     quantize: bool = False,
     with_seg: bool = False,
     model: str = DEFAULT_MODEL,
+    fast_vae: bool = False,
 ):
     """Construct the base + ControlNet pipeline for the chosen model.
 
@@ -827,6 +828,8 @@ def _build_pipeline(
             on top of depth + Canny.
         model: "sd15" (default) or "sdxl". SDXL is trained at 1024 and uses
             fp16-variant ControlNets from diffusers + a non-variant seg net.
+        fast_vae: if True, use Tiny AutoEncoder (madebyollin) for 2-3x faster
+            VAE encode/decode (~2.5M params vs ~80M standard).
     """
     import torch
     from diffusers import (
@@ -889,10 +892,32 @@ def _build_pipeline(
     # Swap the stock VAE for a fine-tuned one: cleaner decode, better skin
     # tones and colors, fewer washed-out highlights. SD 1.5 uses sd-vae-ft-mse
     # (fp16 variant); SDXL uses madebyollin's fp16-fix (no variant).
-    vae_kwargs = {"torch_dtype": load_dtype}
-    if cfg["vae_fp16_variant"]:
-        vae_kwargs["variant"] = cfg["vae_fp16_variant"]
-    pipe.vae = AutoencoderKL.from_pretrained(cfg["vae_id"], **vae_kwargs)
+    # Optionally use Tiny AutoEncoder for 2-3x faster encode/decode.
+    if fast_vae:
+        from diffusers import AutoencoderTiny
+
+        # Map model to appropriate Tiny VAE
+        tiny_vae_map = {
+            "sd15": TINY_VAE_SD_ID,
+            "sd15-turbo": TINY_VAE_SD_ID,
+            "sdxl": TINY_VAE_SDXL_ID,
+            "sdxl-turbo": TINY_VAE_SDXL_ID,
+            "ssd1b": TINY_VAE_SDXL_ID,
+        }
+        tiny_vae_id = tiny_vae_map.get(model)
+        if tiny_vae_id:
+            pipe.vae = AutoencoderTiny.from_pretrained(tiny_vae_id, torch_dtype=load_dtype)
+        else:
+            # Fall back to standard VAE swap if model not in map
+            vae_kwargs = {"torch_dtype": load_dtype}
+            if cfg["vae_fp16_variant"]:
+                vae_kwargs["variant"] = cfg["vae_fp16_variant"]
+            pipe.vae = AutoencoderKL.from_pretrained(cfg["vae_id"], **vae_kwargs)
+    else:
+        vae_kwargs = {"torch_dtype": load_dtype}
+        if cfg["vae_fp16_variant"]:
+            vae_kwargs["variant"] = cfg["vae_fp16_variant"]
+        pipe.vae = AutoencoderKL.from_pretrained(cfg["vae_id"], **vae_kwargs)
 
     # CPU: upcast to fp32 BEFORE moving to device (diffusers refuses fp16 on CPU).
     if device == "cpu":
@@ -1542,6 +1567,7 @@ def generate_image(
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
     bin_resolution: bool = True,
+    fast_vae: bool = False,
 ) -> Image.Image:
     """Regenerate a single image from *data*.
 
@@ -1567,6 +1593,9 @@ def generate_image(
             honored exactly, which is off-distribution for HunyuanDiT
             (trained at 1024) and can produce severe artifacts. Ignored by
             all other backends.
+        fast_vae: Use Tiny AutoEncoder (~2.5M params) instead of standard
+            VAE (~80M). 2-3x faster encode/decode with slight quality trade-off.
+            Works with SD 1.5, SDXL, and SSD-1B. Ignored by other backends.
     """
     if model == "zimage":
         return _generate_zimage(
@@ -1659,6 +1688,7 @@ def generate_image(
         canny_scale=canny_scale,
         seg_scale=seg_scale,
         model=model,
+        fast_vae=fast_vae,
     )
 
 
@@ -1673,6 +1703,7 @@ def _generate_sd(
     canny_scale: float | None,
     seg_scale: float | None,
     model: str,
+    fast_vae: bool = False,
 ) -> Image.Image:
     """SD 1.5 / SDXL path: depth + canny (+ optional seg) ControlNets."""
     device = device_override or get_torch_device()
@@ -1700,7 +1731,7 @@ def _generate_sd(
         scales.append(seg_scale if seg_scale is not None else cfg["seg_scale"])
 
     pipe, torch = _build_pipeline(
-        device, dtype, quantize=quantize, with_seg=has_seg, model=model
+        device, dtype, quantize=quantize, with_seg=has_seg, model=model, fast_vae=fast_vae
     )
 
     prompt = _build_prompt(data, pipe.tokenizer, max_tokens=CLIP_MAX_TOKENS)
@@ -2352,6 +2383,7 @@ def decode_brainimg(
     seg_scale: float | None = None,
     model: str = DEFAULT_MODEL,
     bin_resolution: bool = True,
+    fast_vae: bool = False,
 ) -> tuple[BrainimgData, Image.Image]:
     """Read *path*, regenerate the image, save it to *out_path*."""
     data = load_brainimg(path)
@@ -2367,6 +2399,7 @@ def decode_brainimg(
         seg_scale=seg_scale,
         model=model,
         bin_resolution=bin_resolution,
+        fast_vae=fast_vae,
     )
 
     out_path = Path(out_path)

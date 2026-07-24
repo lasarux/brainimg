@@ -164,6 +164,13 @@ def main(argv: list[str] | None = None) -> int:
         "for HunyuanDiT (trained at 1024) and can produce severe artifacts "
         "(catastrophic noise), but ~4x faster. Ignored by all other backends.",
     )
+    parser.add_argument(
+        "--fast-vae",
+        action="store_true",
+        help="Use Tiny AutoEncoder (madebyollin) for faster VAE encode/decode. "
+        "~2.5M params vs ~80M standard VAE. Works with sd15, sdxl, sdxl-turbo, "
+        "and ssd1b. Slight quality trade-off for 2-3x faster VAE operations.",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.brainimg)
@@ -406,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         seg_scale=args.seg_scale,
         model=args.model,
         bin_resolution=not args.no_bin_resolution,
+        fast_vae=args.fast_vae,
     )
     dt = time.time() - t0
 

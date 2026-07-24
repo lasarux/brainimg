@@ -206,6 +206,35 @@ swap, steps bump, style prefix, tunable CLI flags) is done — see commit
       applies at small sizes -- prefer `--size 1024x1024` for palette
       fidelity.
 
+## Deferred — waiting on upstream release
+
+- [ ] **Evaluate FLUX 3 Dev once weights ship.** Black Forest Labs announced
+      FLUX 3 (blog 2026-07-23) as a unified multimodal flow-matching model
+      (image + video + audio + action prediction, built on their "Self-Flow"
+      approach). As of the announcement only **FLUX 3 Video** is in Early
+      Access, via API / private-weight access only — no public checkpoint.
+      **FLUX 3 Image** and the open-weight **FLUX 3 Dev** backbone are slated
+      for "the following weeks and months" with no firm date. Revisit this
+      item when FLUX 3 Dev weights are public, and check:
+        * Param count, dtype, and resident-memory footprint. FLUX 3 is a
+          *multimodal* backbone (video + audio + image), so the full model is
+          almost certainly too heavy for the 188 GB CPU-only dev box; the
+          realistic candidate is a distilled image-only/"Klein"-style
+          derivative (analogous to the current `flux2-klein` img2img
+          pseudo-ControlNet path), if one ships.
+        * License (FLUX.1-dev / FLUX.2-dev families are non-commercial;
+          FLUX.2-klein is Apache 2.0 — the derivative's license decides
+          whether a `flux3` backend is usable in this repo).
+        * ControlNet availability. No FLUX 3 ControlNet is mentioned in the
+          announcement; if none ships, a `flux3` backend would have to reuse
+          the `flux2-klein` img2img pseudo-ControlNet trick (depth map as the
+          starting image) rather than true structural conditioning.
+      Do **not** assume CPU viability from FLUX.1/FLUX.2-klein experience —
+      the multimodal backbone is materially larger, and even bf16 + FP8
+      quantization may not bring a video-capable model into practical
+      wall-time on CPU. Bench measured PSNR/runtime against `sdxl` and
+      `flux2-klein` before promoting `flux3` past experimental.
+
 ## Known issues (not pure decode-quality)
 
 - [ ] **Captioner accuracy on hard subjects.** The 7B captioner can

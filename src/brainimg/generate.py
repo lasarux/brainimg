@@ -78,6 +78,25 @@ SD15_CONTROLNET_SEG_ID = "lllyasviel/control_v11p_sd15_seg"
 SDXL_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
 SDXL_VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
 SDXL_CONTROLNET_DEPTH_ID = "diffusers/controlnet-depth-sdxl-1.0"
+
+# --- SSD-1B stack (distilled SDXL) ---------------------------------------------------------- #
+# Segmind's SSD-1B is a 1.3B parameter distilled SDXL (50% smaller, 60% faster).
+# It uses the same ControlNets and VAE as SDXL (Apache 2.0 license).
+SSD1B_MODEL_ID = "segmind/SSD-1B"
+SSD1B_CONTROLNET_DEPTH_SCALE = 1.0  # Same as SDXL
+SSD1B_CONTROLNET_CANNY_SCALE = 0.8
+SSD1B_CONTROLNET_SEG_SCALE = 0.6
+SSD1B_GUIDANCE_SCALE = 7.0
+SSD1B_DEFAULT_STEPS = 30
+SSD1B_MAX_DEFAULT_SIDE = 1024
+
+# --- Tiny AutoEncoder VAEs (madebyollin) ------------------------------------- #
+# Fast distilled VAEs (~2.5M params vs ~80M) that can replace standard VAEs
+# for faster encode/decode. Used with --fast-vae flag.
+TINY_VAE_SD_ID = "madebyollin/taesd"  # For SD 1.5
+TINY_VAE_SDXL_ID = "madebyollin/taesdxl"  # For SDXL/SSD-1B
+TINY_VAE_SD3_ID = "madebyollin/taesd3"  # For SD3.5
+
 SDXL_CONTROLNET_CANNY_ID = "diffusers/controlnet-canny-sdxl-1.0"
 # An SDXL ADE20K seg ControlNet now exists (the xinsir one returned 401 at the
 # time TODO.md was written; abovzv's is ungated and safetensors-only).
@@ -649,6 +668,26 @@ def _model_config(model: str) -> dict:
             "turbo_lora_scale": HYPER_SD_LORA_SCALE,
             "default_steps": SDXL_TURBO_DEFAULT_STEPS,
         }
+    if model == "ssd1b":
+        # SSD-1B: Segmind's distilled SDXL (1.3B vs 2.6B params, 60% faster).
+        # Uses same SDXL ControlNets and VAE. Apache 2.0 license.
+        return {
+            "base_id": SSD1B_MODEL_ID,
+            "vae_id": SDXL_VAE_ID,
+            "depth_id": SDXL_CONTROLNET_DEPTH_ID,
+            "canny_id": SDXL_CONTROLNET_CANNY_ID,
+            "seg_id": SDXL_CONTROLNET_SEG_ID,
+            "depth_scale": SSD1B_CONTROLNET_DEPTH_SCALE,
+            "canny_scale": SSD1B_CONTROLNET_CANNY_SCALE,
+            "seg_scale": SSD1B_CONTROLNET_SEG_SCALE,
+            "guidance": SSD1B_GUIDANCE_SCALE,
+            "max_side": SSD1B_MAX_DEFAULT_SIDE,
+            "vae_fp16_variant": None,
+            "seg_fp16_variant": None,
+            "seg_weight_name": "sdxl_segmentation_ade20k_controlnet.safetensors",
+            "turbo": False,
+            "default_steps": SSD1B_DEFAULT_STEPS,
+        }
     if model == "sd15-turbo":
         # Hyper-SD 1.5 distilled stack: SD 1.5 base + sd-vae-ft-mse + the
         # existing depth/canny/seg ControlNets, plus the 8-step CFG-preserved
@@ -799,7 +838,9 @@ def _build_pipeline(
     )
 
     cfg = _model_config(model)
-    if model in ("sdxl", "sdxl-turbo"):
+    if model in ("sdxl", "sdxl-turbo", "ssd1b"):
+        # SDXL, SSD-1B (distilled SDXL), and their turbo variants use the
+        # SDXL ControlNet pipeline. SSD-1B uses the same ControlNets as SDXL.
         pipe_cls = StableDiffusionXLControlNetPipeline
     else:
         # sd15 + sd15-turbo share the SD 1.5 pipeline class.

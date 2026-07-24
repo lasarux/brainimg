@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             "sd15-turbo",
             "sdxl",
             "sdxl-turbo",
+            "ssd1b",
             "zimage",
             "qwen-image",
             "hunyuan",
@@ -106,7 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         "ControlNet is supported on both. 'sd15-turbo' / 'sdxl-turbo' add "
         "ByteDance's Hyper-SD 8-step distilled LoRA on top of the same base "
         "+ ControlNets -- ~4x faster on CPU at a small quality cost (8 steps "
-        "instead of 20-30, guidance scale 7.0/7.5). 'zimage' uses "
+        "instead of 20-30, guidance scale 7.0/7.5). 'ssd1b' uses "
+        "segmind/SSD-1B (distilled SDXL, 1.3B params, 60% faster than SDXL) "
+        "with the same SDXL ControlNets. Apache 2.0 license, 1024-native, "
+        "30 steps. ~4 GB base + ControlNets on CPU. 'zimage' uses "
         "Tongyi-MAI/Z-Image-Turbo (6B bf16 DiT) + the alibaba-pai Union "
         "ControlNet (depth-only; canny and seg from the blueprint are "
         "ignored). 'qwen-image' uses Alibaba's Qwen-Image (Apache 2.0 DiT) "
@@ -244,6 +248,14 @@ def main(argv: list[str] | None = None) -> int:
             mode = "bf16 + cpu-offload"
         else:
             mode = "bf16 (resident in RAM, ~18 GB)"
+    elif args.model == "ssd1b":
+        # SSD-1B: distilled SDXL, uses same ControlNets as SDXL.
+        if device == "cpu":
+            mode = "bf16 (distilled SDXL, ~4 GB base + ControlNets)"
+        elif device == "mps":
+            mode = "bf16 + cpu-offload (distilled SDXL)"
+        else:
+            mode = "bf16 (distilled SDXL)"
     elif args.model in ("sd15-turbo", "sdxl-turbo"):
         # Turbo LoRAs ride on the SD 1.5 / SDXL base + same ControlNets; the
         # mode string mirrors the non-turbo path but flags the distillation.
@@ -266,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.model in (
         "zimage", "qwen-image", "hunyuan", "hunyuan-full", "sana",
-        "flux2-klein",
+        "flux2-klein", "ssd1b",
         "flux-depth", "flux-canny",
         "flux-depth-turbo", "flux-canny-turbo",
         "sd35", "flux-union",
@@ -276,9 +288,9 @@ def main(argv: list[str] | None = None) -> int:
         # step count they use.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")
-    elif args.model in ("sd15-turbo", "sdxl-turbo"):
-        # Turbo stacks ignore the file's stored step count (tuned for the
-        # 20-30 step SD schedule) and use the distilled LoRA's 8 steps unless
+    elif args.model in ("sd15-turbo", "sdxl-turbo", "ssd1b"):
+        # Turbo stacks and SSD-1B ignore the file's stored step count (tuned
+        # for the 20-30 step SD schedule) and use their own defaults unless
         # the user passes --steps explicitly.
         eff_steps = args.steps or _model_config(args.model)["default_steps"]
         print(f"  steps  : {eff_steps} ({args.model} default; file stored {data.steps})")

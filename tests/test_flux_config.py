@@ -133,13 +133,46 @@ def test_turbo_guidance_matches_non_turbo_defaults():
     assert _model_config("sdxl-turbo")["guidance"] == _model_config("sdxl")["guidance"]
 
 
+def test_ssd1b_config_shape():
+    """SSD-1B config: distilled SDXL (1.3B params), same SDXL ControlNets.
+    Apache 2.0 license, 1024-native, 30 steps."""
+    from brainimg.generate import (
+        SDXL_CONTROLNET_CANNY_ID,
+        SDXL_CONTROLNET_DEPTH_ID,
+        SDXL_CONTROLNET_SEG_ID,
+        SDXL_VAE_ID,
+        SSD1B_CONTROLNET_CANNY_SCALE,
+        SSD1B_CONTROLNET_DEPTH_SCALE,
+        SSD1B_CONTROLNET_SEG_SCALE,
+        SSD1B_DEFAULT_STEPS,
+        SSD1B_GUIDANCE_SCALE,
+        SSD1B_MAX_DEFAULT_SIDE,
+        SSD1B_MODEL_ID,
+    )
+    cfg = _model_config("ssd1b")
+    assert cfg["base_id"] == SSD1B_MODEL_ID
+    assert cfg["vae_id"] == SDXL_VAE_ID
+    # Uses same ControlNets as SDXL
+    assert cfg["depth_id"] == SDXL_CONTROLNET_DEPTH_ID
+    assert cfg["canny_id"] == SDXL_CONTROLNET_CANNY_ID
+    assert cfg["seg_id"] == SDXL_CONTROLNET_SEG_ID
+    assert cfg["depth_scale"] == SSD1B_CONTROLNET_DEPTH_SCALE
+    assert cfg["canny_scale"] == SSD1B_CONTROLNET_CANNY_SCALE
+    assert cfg["seg_scale"] == SSD1B_CONTROLNET_SEG_SCALE
+    assert cfg["guidance"] == SSD1B_GUIDANCE_SCALE
+    assert cfg["max_side"] == SSD1B_MAX_DEFAULT_SIDE
+    assert cfg["default_steps"] == SSD1B_DEFAULT_STEPS
+    assert cfg["turbo"] is False
+    assert cfg["vae_fp16_variant"] is None
+
+
 def test_all_model_configs_carry_turbo_flag():
     """Every _model_config entry must set ``turbo`` so downstream code can
     do ``cfg.get("turbo")`` without None ambiguity. The non-turbo / non-SD
     paths must set it to False explicitly.
     """
     for model in (
-        "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "zimage", "qwen-image",
+        "sd15", "sd15-turbo", "sdxl", "sdxl-turbo", "ssd1b", "zimage", "qwen-image",
         "hunyuan", "hunyuan-full", "sana", "flux2-klein",
         "flux-depth", "flux-canny", "flux-depth-turbo", "flux-canny-turbo",
         "sd35", "flux-union",

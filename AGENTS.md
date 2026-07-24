@@ -52,7 +52,9 @@ All raw commands below still work; the Makefile is a convenience layer.
     is also ML-free and asserts the `_model_config` contract for all `--model` choices.
 - **Lint**: `ruff check .`  (line-length 100, rules E/F/W/I).
 - **Encode**: `python src/encoder.py samples/real.jpg -o outputs/out.brainimg [--seed 42]`
-- **Decode**: `python src/decoder.py outputs/out.brainimg -o outputs/recon.png [--device cpu|mps|cuda] [--quantize] [--model ...]`
+- **Decode**: `python src/decoder.py outputs/out.brainimg -o outputs/recon.png [--device cpu|mps|cuda] [--quantize] [--model ...] [--fast-vae]`
+  - `--fast-vae`: Use Tiny AutoEncoder (~2.5M params) for 2-3x faster VAE
+    encode/decode. Works with sd15, sdxl, sdxl-turbo, ssd1b.
   - **AMD CPU target** (the dev box): `--device cpu` fp32, no quantization needed
     (188 GB RAM fits SDXL/Z-Image/FLUX). Add `--model sd15-turbo` / `sdxl-turbo`
     for Hyper-SD 8-step distilled LoRA — measured on `samples/mandril_color.tif`
@@ -76,8 +78,9 @@ All raw commands below still work; the Makefile is a convenience layer.
 - `src/brainimg/generate.py` has decoder backends gated by `--model`:
   `sd15` (default, depth+canny+seg ControlNets), `sdxl` (same three at 1024),
   `sd15-turbo` / `sdxl-turbo` (same base + ControlNets + ByteDance Hyper-SD
-  8-step distilled LoRA, DDIM trailing schedule), `zimage` (Z-Image-Turbo 6B
-  DiT + single Union ControlNet, depth-only), `qwen-image` (Qwen-Image DiT +
+  8-step distilled LoRA, DDIM trailing schedule), `ssd1b` (segmind/SSD-1B,
+  distilled SDXL 1.3B, 60% faster, same SDXL ControlNets, Apache 2.0),
+  `zimage` (Z-Image-Turbo 6B DiT + single Union ControlNet, depth-only), `qwen-image` (Qwen-Image DiT +
   Union ControlNet, depth-only), `hunyuan` / `hunyuan-full` (HunyuanDiT v1.2
   Distilled/full, depth+canny ControlNets), `sana` (NVIDIA SANA 600M linear
   DiT, HED ControlNet fed the canny map — only edge ControlNet available),
@@ -233,6 +236,14 @@ All raw commands below still work; the Makefile is a convenience layer.
   converts the depth map's grayscale into warm tones regardless of the
   caption. 42 s at 512², 4 steps, ~13 GB RAM. Canny and seg maps are
   ignored (only one image input).
+- **Tiny AutoEncoder VAEs**: `--fast-vae` uses madebyollin's distilled VAEs
+  (~2.5M params vs ~80M standard) for 2-3x faster VAE encode/decode with slight
+  quality trade-off. Available for SD 1.5 (`taesd`), SDXL/SSD-1B (`taesdxl`),
+  and SD3 (`taesd3`). This is a pure speed optimization -- ControlNet
+  conditioning and diffusion quality are unchanged; only the final latent
+  decode and encode (for img2img-style pipelines) are affected. Falls back
+  to standard VAE for unsupported backends (Z-Image, Qwen-Image, HunyuanDiT,
+  SANA, FLUX, SD3.5 already use their own VAEs; tiny VAEs don't apply).
 
 ## Conventions
 

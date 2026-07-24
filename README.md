@@ -333,8 +333,11 @@ pytest                       # format tests, no models needed
 | `samples/real.jpg` (puppy) | 13.4 KB | 2.7 KB | 5.0x | 59 s @ 256x256 |
 
 The captioner correctly described the scene ("a black puppy sitting on a
-wooden surface"); the decoder produced a visually faithful reconstruction. See
-`comparison.jpg` for a side-by-side.
+wooden surface"); the decoder produced a visually faithful reconstruction.
+`comparison.jpg` (gitignored) holds the side-by-side — regenerate it with
+`python encoder.py samples/real.jpg -o real.brainimg`,
+`python decoder.py real.brainimg -o recon.png`, then
+`python scripts/make_comparison.py samples/real.jpg recon.png -o comparison.jpg`.
 
 ## Verified results (AMD CPU, 188 GB RAM)
 

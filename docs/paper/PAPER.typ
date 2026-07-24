@@ -1,7 +1,7 @@
 #let doc-title = "brainimg: A Reproducible Systems Study of Generative-Recall Image Compression"
 #let doc-authors = ("Pedro A. Gracia Fajardo",)
 #let doc-email = "lasarux@gmail.com"
-#let doc-date = "2026-07-19"
+#let doc-date = "2026-07-20"
 #let doc-abstract = "Classical image formats store pixels—either directly, as transform coefficients,
 or as latent codes—and are therefore resolution-bound and tied to the exact
 appearance of the original. This paper presents *brainimg*, a small prototype
@@ -10,13 +10,15 @@ tiny *structural blueprint* (128×128 depth, Canny-edge, and ADE20K
 segmentation maps) and a seed, and regenerates a visually faithful image on
 decode using one of fourteen pluggable diffusion decoder backends: Stable
 Diffusion 1.5 (default) or SDXL with two-to-three ControlNets, either of
-those plus ByteDance's Hyper-SD 8-step distilled LoRA (turbo), Z-Image-Turbo
-with a single Union ControlNet, Qwen-Image (Apache 2.0) with InstantX's
+ those plus ByteDance's Hyper-SD 8-step distilled LoRA (turbo), Z-Image-Turbo
+ (Apache 2.0) with a single Union ControlNet, Qwen-Image (Apache 2.0) with InstantX's
 Union ControlNet, HunyuanDiT v1.2 with separate depth +
 canny ControlNets, NVIDIA SANA 600M with an HED ControlNet fed the canny
-map, FLUX.2-klein-4B as an img2img pseudo-ControlNet fed the depth map, or
-FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat conditioning,
-optionally with Hyper-SD's 8-step FLUX LoRA. We frame brainimg
+ map, FLUX.2-klein-4B as an img2img pseudo-ControlNet fed the depth map,
+ FLUX.1-Depth-dev / FLUX.1-Canny-dev with channel-concat conditioning
+ (optionally with Hyper-SD's 8-step FLUX LoRA), FLUX.1-dev with the
+ Shakker-Labs Union ControlNet (depth + canny), or Stable Diffusion 3.5
+ Large with depth + canny ControlNets. We frame brainimg
 as a working, reproducible instantiation of the \"Semantic-Relational Field /
 generative-recall\" paradigm: rather than compressing appearance, it stores
 the scene's semantics and geometry and lets a diffusion model repaint it. We
@@ -102,7 +104,7 @@ replacement for JPEG.
 = 1. Introduction
 
 Every widely used image format answers a variant of the same question: _how do \
-we store these pixels efficiently?_ PNG stores exact colors and predicts the \
+we store these pixels efficiently?_ PNG stores exact colours and predicts the \
 next pixel; JPEG/WebP discard transform coefficients the human visual system \
 barely notices; AVIF generalizes this to AV1 intra-frames. All three paradigms \
 share two properties: the file is bound to a native resolution, and "loss" \
@@ -146,8 +148,8 @@ unchanged as new conditioners are added.
 MLX, Qwen2.5-VL-7B on CPU/CUDA), Depth-Anything-V2-Base, OpenCV Canny, and \
 OneFormer ADE20K semantic segmentation, with explicit memory release \
 between stages so the pipeline fits in 8 GB.
-+ *Fourteen pluggable decoder backends* spanning seven model families \
-\(SD 1.5, SDXL, Z-Image, Qwen-Image, HunyuanDiT, SANA, FLUX), each with an \
++ *Fourteen pluggable decoder backends* spanning eight model families \
+\(SD 1.5, SDXL, SD 3.5, Z-Image, Qwen-Image, HunyuanDiT, SANA, FLUX), each with an \
 optional Hyper-SD 8-step distilled turbo variant for SD 1.5, SDXL, and \
 FLUX. All backends consume the same blueprint; new backends require no \
 schema change.
@@ -330,7 +332,7 @@ and the same brightness/saturation post-processing:
   [`sd15-turbo`], [SD 1.5 + Hyper-SD 8-step LoRA], [depth + canny \(+ seg) ControlNets], [8], [CreativeML Open RAIL-M],
   [`sdxl`], [`stable-diffusion-xl-base-1.0`], [depth + canny \(+ seg) ControlNets], [30], [CreativeML Open RAIL-M],
   [`sdxl-turbo`], [SDXL + Hyper-SD 8-step LoRA], [depth + canny \(+ seg) ControlNets], [8], [CreativeML Open RAIL-M],
-  [`zimage`], [`Tongyi-MAI/Z-Image-Turbo`], [single Union ControlNet \(depth)], [9 \(8-step Turbo)], [Tongyi-MAI non-commercial],
+  [`zimage`], [`Tongyi-MAI/Z-Image-Turbo`], [single Union ControlNet \(depth)], [9 \(8-step Turbo)], [*Apache 2.0*],
   [`qwen-image`], [`Qwen/Qwen-Image`], [single Union ControlNet \(depth)], [50], [*Apache 2.0*],
   [`hunyuan`], [`Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled`], [depth + canny ControlNets], [25], [tencent-hunyuan-community],
   [`sana`], [`Efficient-Large-Model/Sana_600M_1024px_diffusers`], [single HED ControlNet \(canny map)], [20], [*MIT*],
@@ -478,9 +480,9 @@ the 10.0 / 30.0 the non-turbo control variants use).
 Union ControlNet supporting canny + depth + pose + soft-edge. Same pattern \
 as Z-Image: depth-only conditioning, blueprint's canny/seg ignored, bf16 \
 throughout. Defaults: 50 steps, `true_cfg_scale = 4.0` \(Qwen-Image's CFG \
-parameter, distinct from `guidance_scale`), `controlnet_conditioning_scale = 0.9`, 1024 max side. The Qwen-Image backend is the only fully-open \
-\(Apache 2.0) high-quality option in the stack; FLUX is non-commercial and \
-Z-Image is non-commercial.
+parameter, distinct from `guidance_scale`), `controlnet_conditioning_scale = 0.9`, 1024 max side. The Qwen-Image backend is one of four fully-open \
+options in the stack \(alongside Z-Image / Apache 2.0, SANA / MIT, and \
+FLUX.2-klein / Apache 2.0); FLUX is non-commercial.
 
 === 3.3.6 HunyuanDiT v1.2 \(depth + canny ControlNets)
 
@@ -670,13 +672,12 @@ is a direct consequence of storing meaning rather than pixels.
 == 4.3 Reconstruction quality \(qualitative)
 
 Reconstruction is semantically faithful \(same scene, layout, and lighting) \
-but not pixel-identical—by design. The committed repository ships one \
-side-by-side figure:
-
-- `comparison.jpg` — original vs. brainimg reconstruction of `samples/real.jpg`. \
-Per `README.md`, the captioner correctly described the scene \("a black puppy \
+but not pixel-identical—by design. The canonical side-by-side figure is \
+`comparison.jpg` \(original vs. brainimg reconstruction of `samples/real.jpg`): \
+per `README.md`, the captioner correctly described the scene \("a black puppy \
 sitting on a wooden surface") and the decoder produced a visually faithful \
-reconstruction at 256×256 in 59 s on the M1/8 GB machine.
+reconstruction at 256×256 in 59 s on the M1/8 GB machine. Like the other \
+decoder outputs below it is gitignored and regenerated on demand.
 
 #figure(
   image("../grids/mandril_grid.jpg", width: 100%),
@@ -997,13 +998,13 @@ cannot correct. Prefer each backend's native resolution \(512 for SD 1.5, \
 1024 for SDXL / Z-Image / HunyuanDiT / SANA / FLUX.2-klein / FLUX) when \
 colour fidelity matters.
 - *License footprint.* The default backend \(SD 1.5 + ControlNets) is \
-CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is non-commercial. \
+CreativeML Open RAIL-M. SDXL is the same. Z-Image-Turbo is *Apache 2.0*. \
 HunyuanDiT is tencent-hunyuan-community \(a bespoke community license, \
 not OSI-approved). FLUX.1-Depth-dev / -Canny-dev are FLUX.1-dev \
 non-commercial; SD3.5 is stabilityai-ai-community \(gated, free up to \
-\$1M annual revenue). Qwen-Image, SANA, and FLUX.2-klein-4B are *Apache 2.0* \
-— the three fully-open options. If distribution matters, the SD 1.5/SDXL, \
-Qwen-Image, SANA, and FLUX.2-klein paths are the permissively licensed \
+\$1M annual revenue). Z-Image-Turbo, Qwen-Image, and FLUX.2-klein-4B are *Apache 2.0* and \
+SANA is *MIT* — the four fully-open options. If distribution matters, the SD 1.5/SDXL, \
+Z-Image, Qwen-Image, SANA, and FLUX.2-klein paths are the permissively licensed \
 choices.
 
 === 5.3 Planned evaluation \(not run here)
